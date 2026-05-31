@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "node --watch server/index.ts",
+    "dev:server": "tsx watch server/index.ts",
     "dev:client": "cd client && npm run dev",
     "build": "npm run build:server && npm run build:client",
-    "build:server": "tsc --project tsconfig.server.json",
+    "build:server": "tsc",
     "build:client": "cd client && npm run build",
     "start": "node dist/server/index.js",
     "db:init": "node database/init.js",
@@ -40,6 +40,8 @@
     "@types/express": "^4.17.17",
     "typescript": "^5.0.0",
     "concurrently": "^8.2.0",
-    "nodemon": "^3.0.1"
+    "tsx": "^4.7.0",
+    "@types/cors": "^2.8.17",
+    "@types/jsonwebtoken": "^9.0.5"
   }
 }
