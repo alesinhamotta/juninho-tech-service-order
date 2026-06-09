@@ -3,12 +3,10 @@
 // ============================================================================
 
 import { Router, Response } from 'express';
-import { supabase } from '../config/database';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { query, queryOne, queryMany } from '../config/database.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
-
-// Todas as rotas de OS exigem autenticação
 router.use(authMiddleware);
 
 // ============================================================================
@@ -18,25 +16,42 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const { status, tipo, search } = req.query;
 
-    let query = supabase
-      .from('service_orders')
-      .select(`
-        *,
-        clientes (id, nome, telefone, email)
-      `)
-      .order('data_criacao', { ascending: false });
+    let sql = `
+      SELECT
+        os.*,
+        c.nome AS cliente_nome,
+        c.telefone AS cliente_telefone,
+        c.email AS cliente_email
+      FROM service_orders os
+      LEFT JOIN clientes c ON os.cliente_id = c.id
+      WHERE 1=1
+    `;
+    const params: unknown[] = [];
+    let idx = 1;
 
-    if (status) query = query.eq('status', status);
-    if (tipo) query = query.eq('tipo', tipo);
+    if (status) { sql += ` AND os.status = $${idx++}`; params.push(status); }
+    if (tipo) { sql += ` AND os.tipo = $${idx++}`; params.push(tipo); }
     if (search) {
-      query = query.or(`numero_os.ilike.%${search}%,descricao.ilike.%${search}%`);
+      sql += ` AND (os.numero_os ILIKE $${idx} OR os.descricao ILIKE $${idx})`;
+      params.push(`%${search}%`);
+      idx++;
     }
 
-    const { data, error } = await query;
+    sql += ` ORDER BY os.data_criacao DESC`;
 
-    if (error) throw error;
+    const rows = await queryMany<Record<string, unknown>>(sql, params);
 
-    return res.json({ data, total: data?.length || 0 });
+    // Formatar para manter compatibilidade com o frontend
+    const data = rows.map((row) => ({
+      ...row,
+      clientes: {
+        nome: row.cliente_nome,
+        telefone: row.cliente_telefone,
+        email: row.cliente_email,
+      },
+    }));
+
+    return res.json({ data, total: data.length });
   } catch (error) {
     console.error('Erro ao listar ordens de serviço:', error);
     return res.status(500).json({ error: 'Erro interno ao listar ordens de serviço' });
@@ -44,55 +59,56 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 });
 
 // ============================================================================
-// GET /api/os/:id - Obter ordem de serviço com itens e acessórios
+// GET /api/os/:id - Obter OS completa com itens
 // ============================================================================
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const os = await queryOne<Record<string, unknown>>(
+      `SELECT os.*, c.nome AS cliente_nome, c.telefone AS cliente_telefone,
+              c.email AS cliente_email, c.endereco AS cliente_endereco,
+              c.cidade AS cliente_cidade, c.estado AS cliente_estado
+       FROM service_orders os
+       LEFT JOIN clientes c ON os.cliente_id = c.id
+       WHERE os.id = $1`,
+      [req.params.id]
+    );
 
-    const { data: os, error } = await supabase
-      .from('service_orders')
-      .select(`
-        *,
-        clientes (id, nome, telefone, email, endereco, cidade, estado),
-        itens_os (
-          id, descricao, quantidade, preco_unitario, subtotal, tipo,
-          produtos (id, nome, categoria, marca)
-        ),
-        checklist_items (
-          id, marcado, observacao,
-          checklists (id, tipo, item, descricao, ordem)
-        ),
-        pagamentos (id, valor, forma_pagamento, numero_parcela, total_parcelas, data_pagamento, status)
-      `)
-      .eq('id', id)
-      .single();
+    if (!os) return res.status(404).json({ error: 'Ordem de serviço não encontrada' });
 
-    if (error || !os) {
-      return res.status(404).json({ error: 'Ordem de serviço não encontrada' });
-    }
+    const itens = await queryMany(
+      `SELECT i.*, p.nome AS produto_nome, p.categoria AS produto_categoria
+       FROM itens_os i
+       LEFT JOIN produtos p ON i.produto_id = p.id
+       WHERE i.os_id = $1`,
+      [req.params.id]
+    );
 
-    return res.json(os);
+    return res.json({
+      ...os,
+      clientes: {
+        nome: os.cliente_nome,
+        telefone: os.cliente_telefone,
+        email: os.cliente_email,
+        endereco: os.cliente_endereco,
+        cidade: os.cliente_cidade,
+        estado: os.cliente_estado,
+      },
+      itens_os: itens,
+    });
   } catch (error) {
-    console.error('Erro ao buscar ordem de serviço:', error);
+    console.error('Erro ao buscar OS:', error);
     return res.status(500).json({ error: 'Erro interno ao buscar ordem de serviço' });
   }
 });
 
 // ============================================================================
-// POST /api/os - Criar nova ordem de serviço (orçamento)
+// POST /api/os - Criar nova ordem de serviço
 // ============================================================================
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const {
-      cliente_id,
-      tipo,
-      descricao,
-      desconto,
-      forma_pagamento,
-      parcelas,
-      garantia_meses,
-      observacoes,
+      cliente_id, tipo, descricao, desconto,
+      forma_pagamento, parcelas, garantia_meses, observacoes,
     } = req.body;
 
     if (!cliente_id || !tipo) {
@@ -105,95 +121,77 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     }
 
     // Gerar número único da OS: OS-YYYYMMDD-XXXX
-    const dataAtual = new Date();
-    const dataStr = dataAtual.toISOString().slice(0, 10).replace(/-/g, '');
-    const { count } = await supabase
-      .from('service_orders')
-      .select('*', { count: 'exact', head: true });
-    const numeroOS = `OS-${dataStr}-${String((count || 0) + 1).padStart(4, '0')}`;
+    const dataStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const countResult = await queryOne<{ count: string }>('SELECT COUNT(*) as count FROM service_orders', []);
+    const numeroOS = `OS-${dataStr}-${String(Number(countResult?.count || 0) + 1).padStart(4, '0')}`;
 
-    const { data: novaOS, error } = await supabase
-      .from('service_orders')
-      .insert([{
-        numero_os: numeroOS,
-        cliente_id,
-        tipo,
-        status: 'PENDENTE',
-        descricao,
-        desconto: desconto || 0,
-        valor_total: 0,
-        valor_final: 0,
-        forma_pagamento: forma_pagamento || 'PENDENTE',
-        parcelas: parcelas || 1,
-        garantia_meses: garantia_meses || 12,
-        observacoes,
-      }])
-      .select(`*, clientes (id, nome, telefone)`)
-      .single();
+    const novaOS = await queryOne<Record<string, unknown>>(
+      `INSERT INTO service_orders
+         (numero_os, cliente_id, tipo, status, descricao, desconto, valor_total,
+          valor_final, forma_pagamento, parcelas, garantia_meses, observacoes)
+       VALUES ($1,$2,$3,'PENDENTE',$4,$5,0,0,$6,$7,$8,$9)
+       RETURNING *`,
+      [
+        numeroOS, cliente_id, tipo, descricao || null,
+        desconto || 0, forma_pagamento || 'PENDENTE',
+        parcelas || 1, garantia_meses || 12, observacoes || null,
+      ]
+    );
 
-    if (error) throw error;
+    // Buscar dados do cliente para retornar junto
+    const cliente = await queryOne<{ nome: string; telefone: string }>(
+      'SELECT nome, telefone FROM clientes WHERE id = $1', [cliente_id]
+    );
 
     return res.status(201).json({
       message: 'Ordem de serviço criada com sucesso',
-      data: novaOS,
+      data: { ...novaOS, clientes: cliente },
     });
   } catch (error) {
-    console.error('Erro ao criar ordem de serviço:', error);
+    console.error('Erro ao criar OS:', error);
     return res.status(500).json({ error: 'Erro interno ao criar ordem de serviço' });
   }
 });
 
 // ============================================================================
-// POST /api/os/:id/itens - Adicionar item/peça à ordem de serviço
+// POST /api/os/:id/itens - Adicionar item/peça à OS
 // ============================================================================
 router.post('/:id/itens', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
     const { produto_id, descricao, quantidade, preco_unitario, tipo } = req.body;
+    const osId = req.params.id;
 
     if (!quantidade || !preco_unitario || !tipo) {
       return res.status(400).json({ error: 'Quantidade, preço unitário e tipo são obrigatórios' });
     }
 
-    const subtotal = quantidade * preco_unitario;
+    const subtotal = Number(quantidade) * Number(preco_unitario);
 
-    const { data: novoItem, error } = await supabase
-      .from('itens_os')
-      .insert([{
-        os_id: id,
-        produto_id: produto_id || null,
-        descricao,
-        quantidade,
-        preco_unitario,
-        subtotal,
-        tipo,
-      }])
-      .select('*')
-      .single();
+    const novoItem = await queryOne(
+      `INSERT INTO itens_os (os_id, produto_id, descricao, quantidade, preco_unitario, subtotal, tipo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [osId, produto_id || null, descricao || null, quantidade, preco_unitario, subtotal, tipo]
+    );
 
-    if (error) throw error;
+    // Recalcular valor total da OS
+    const totaisResult = await queryOne<{ total: string; desconto: string }>(
+      `SELECT COALESCE(SUM(i.subtotal), 0) AS total, os.desconto
+       FROM itens_os i
+       RIGHT JOIN service_orders os ON os.id = $1
+       WHERE i.os_id = $1 OR i.os_id IS NULL
+       GROUP BY os.desconto`,
+      [osId]
+    );
 
-    // Recalcular o valor total da OS
-    const { data: todosItens } = await supabase
-      .from('itens_os')
-      .select('subtotal')
-      .eq('os_id', id);
-
-    const valorTotal = todosItens?.reduce((acc, item) => acc + Number(item.subtotal), 0) || 0;
-
-    const { data: osAtualizada } = await supabase
-      .from('service_orders')
-      .select('desconto')
-      .eq('id', id)
-      .single();
-
-    const desconto = Number(osAtualizada?.desconto || 0);
+    const valorTotal = Number(totaisResult?.total || 0);
+    const desconto = Number(totaisResult?.desconto || 0);
     const valorFinal = valorTotal - desconto;
 
-    await supabase
-      .from('service_orders')
-      .update({ valor_total: valorTotal, valor_final: valorFinal })
-      .eq('id', id);
+    await query(
+      'UPDATE service_orders SET valor_total=$1, valor_final=$2 WHERE id=$3',
+      [valorTotal, valorFinal, osId]
+    );
 
     return res.status(201).json({
       message: 'Item adicionado com sucesso',
@@ -208,19 +206,13 @@ router.post('/:id/itens', async (req: AuthRequest, res: Response) => {
 });
 
 // ============================================================================
-// PUT /api/os/:id - Atualizar ordem de serviço (status, pagamento, desconto)
+// PUT /api/os/:id - Atualizar status/pagamento da OS
 // ============================================================================
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
     const {
-      status,
-      forma_pagamento,
-      parcelas,
-      desconto,
-      data_pagamento,
-      data_conclusao,
-      observacoes,
+      status, forma_pagamento, parcelas, desconto,
+      data_pagamento, data_conclusao, observacoes,
     } = req.body;
 
     const statusValidos = ['PENDENTE', 'APROVADO', 'PAGO', 'CONCLUIDO', 'CANCELADO'];
@@ -228,45 +220,38 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: `Status inválido. Use: ${statusValidos.join(', ')}` });
     }
 
-    // Buscar OS atual para recalcular valor_final se desconto mudar
-    const { data: osAtual } = await supabase
-      .from('service_orders')
-      .select('valor_total, desconto')
-      .eq('id', id)
-      .single();
+    const osAtual = await queryOne<{ valor_total: string; desconto: string }>(
+      'SELECT valor_total, desconto FROM service_orders WHERE id = $1',
+      [req.params.id]
+    );
+    if (!osAtual) return res.status(404).json({ error: 'Ordem de serviço não encontrada' });
 
-    const novoDesconto = desconto !== undefined ? desconto : Number(osAtual?.desconto || 0);
-    const valorFinal = Number(osAtual?.valor_total || 0) - novoDesconto;
+    const novoDesconto = desconto !== undefined ? Number(desconto) : Number(osAtual.desconto);
+    const valorFinal = Number(osAtual.valor_total) - novoDesconto;
 
-    const camposAtualizar: Record<string, unknown> = {};
-    if (status) camposAtualizar.status = status;
-    if (forma_pagamento) camposAtualizar.forma_pagamento = forma_pagamento;
-    if (parcelas) camposAtualizar.parcelas = parcelas;
-    if (desconto !== undefined) {
-      camposAtualizar.desconto = novoDesconto;
-      camposAtualizar.valor_final = valorFinal;
-    }
-    if (data_pagamento) camposAtualizar.data_pagamento = data_pagamento;
-    if (data_conclusao) camposAtualizar.data_conclusao = data_conclusao;
-    if (observacoes !== undefined) camposAtualizar.observacoes = observacoes;
+    const osAtualizada = await queryOne(
+      `UPDATE service_orders SET
+         status = COALESCE($1, status),
+         forma_pagamento = COALESCE($2, forma_pagamento),
+         parcelas = COALESCE($3, parcelas),
+         desconto = $4,
+         valor_final = $5,
+         data_pagamento = COALESCE($6, data_pagamento),
+         data_conclusao = COALESCE($7, data_conclusao),
+         observacoes = COALESCE($8, observacoes)
+       WHERE id = $9
+       RETURNING *`,
+      [
+        status || null, forma_pagamento || null, parcelas || null,
+        novoDesconto, valorFinal,
+        data_pagamento || null, data_conclusao || null, observacoes || null,
+        req.params.id,
+      ]
+    );
 
-    const { data: osAtualizada, error } = await supabase
-      .from('service_orders')
-      .update(camposAtualizar)
-      .eq('id', id)
-      .select('*')
-      .single();
-
-    if (error || !osAtualizada) {
-      return res.status(404).json({ error: 'Ordem de serviço não encontrada' });
-    }
-
-    return res.json({
-      message: 'Ordem de serviço atualizada com sucesso',
-      data: osAtualizada,
-    });
+    return res.json({ message: 'Ordem de serviço atualizada com sucesso', data: osAtualizada });
   } catch (error) {
-    console.error('Erro ao atualizar ordem de serviço:', error);
+    console.error('Erro ao atualizar OS:', error);
     return res.status(500).json({ error: 'Erro interno ao atualizar ordem de serviço' });
   }
 });
@@ -276,49 +261,31 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.post('/:id/converter-venda', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
     const { forma_pagamento, parcelas, data_pagamento } = req.body;
 
-    // Verificar se a OS existe e é um orçamento
-    const { data: os, error: errorBusca } = await supabase
-      .from('service_orders')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const os = await queryOne<{ tipo: string; status: string }>(
+      'SELECT tipo, status FROM service_orders WHERE id = $1',
+      [req.params.id]
+    );
 
-    if (errorBusca || !os) {
-      return res.status(404).json({ error: 'Ordem de serviço não encontrada' });
-    }
+    if (!os) return res.status(404).json({ error: 'Ordem de serviço não encontrada' });
+    if (os.tipo !== 'ORCAMENTO') return res.status(400).json({ error: 'Somente orçamentos podem ser convertidos em venda' });
+    if (os.status === 'CANCELADO') return res.status(400).json({ error: 'Não é possível converter um orçamento cancelado' });
 
-    if (os.tipo !== 'ORCAMENTO') {
-      return res.status(400).json({ error: 'Somente orçamentos podem ser convertidos em venda' });
-    }
+    const osConvertida = await queryOne(
+      `UPDATE service_orders
+       SET tipo='VENDA', status='PAGO',
+           forma_pagamento=COALESCE($1, forma_pagamento),
+           parcelas=COALESCE($2, parcelas),
+           data_pagamento=COALESCE($3, NOW())
+       WHERE id=$4
+       RETURNING *`,
+      [forma_pagamento || null, parcelas || null, data_pagamento || null, req.params.id]
+    );
 
-    if (os.status === 'CANCELADO') {
-      return res.status(400).json({ error: 'Não é possível converter um orçamento cancelado' });
-    }
-
-    const { data: osConvertida, error } = await supabase
-      .from('service_orders')
-      .update({
-        tipo: 'VENDA',
-        status: 'PAGO',
-        forma_pagamento: forma_pagamento || os.forma_pagamento,
-        parcelas: parcelas || os.parcelas,
-        data_pagamento: data_pagamento || new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select('*')
-      .single();
-
-    if (error) throw error;
-
-    return res.json({
-      message: 'Orçamento convertido em venda com sucesso',
-      data: osConvertida,
-    });
+    return res.json({ message: 'Orçamento convertido em venda com sucesso', data: osConvertida });
   } catch (error) {
-    console.error('Erro ao converter orçamento em venda:', error);
+    console.error('Erro ao converter OS:', error);
     return res.status(500).json({ error: 'Erro interno ao converter orçamento em venda' });
   }
 });

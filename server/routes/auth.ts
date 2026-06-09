@@ -3,9 +3,9 @@
 // ============================================================================
 
 import { Router, Response } from 'express';
-import { supabase } from '../config/database';
-import { hashSenha, compararSenha, gerarToken } from '../utils/auth';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { query, queryOne } from '../config/database.js';
+import { hashSenha, compararSenha, gerarToken } from '../utils/auth.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -19,31 +19,28 @@ router.post('/register', async (req: AuthRequest, res: Response) => {
     if (!email || !nome || !senha) {
       return res.status(400).json({ error: 'Email, nome e senha são obrigatórios' });
     }
-
     if (senha.length < 6) {
       return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres' });
     }
 
-    // Verificar se o email já está cadastrado
-    const { data: usuarioExistente } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('email', email)
-      .single();
-
+    const usuarioExistente = await queryOne(
+      'SELECT id FROM usuarios WHERE email = $1',
+      [email]
+    );
     if (usuarioExistente) {
       return res.status(400).json({ error: 'Este email já está cadastrado' });
     }
 
     const senhaHash = await hashSenha(senha);
 
-    const { data: novoUsuario, error } = await supabase
-      .from('usuarios')
-      .insert([{ email, nome, senha_hash: senhaHash }])
-      .select('id, email, nome, ativo, data_criacao')
-      .single();
+    const novoUsuario = await queryOne<{ id: string; email: string; nome: string; ativo: boolean; data_criacao: string }>(
+      `INSERT INTO usuarios (email, nome, senha_hash)
+       VALUES ($1, $2, $3)
+       RETURNING id, email, nome, ativo, data_criacao`,
+      [email, nome, senhaHash]
+    );
 
-    if (error) throw error;
+    if (!novoUsuario) throw new Error('Erro ao criar usuário');
 
     const token = gerarToken(novoUsuario.id, novoUsuario.email);
 
@@ -69,16 +66,14 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Email e senha são obrigatórios' });
     }
 
-    const { data: usuario, error } = await supabase
-      .from('usuarios')
-      .select('id, email, nome, senha_hash, ativo')
-      .eq('email', email)
-      .single();
+    const usuario = await queryOne<{ id: string; email: string; nome: string; senha_hash: string; ativo: boolean }>(
+      'SELECT id, email, nome, senha_hash, ativo FROM usuarios WHERE email = $1',
+      [email]
+    );
 
-    if (error || !usuario) {
+    if (!usuario) {
       return res.status(401).json({ error: 'Email ou senha incorretos' });
     }
-
     if (!usuario.ativo) {
       return res.status(401).json({ error: 'Usuário inativo. Entre em contato com o administrador.' });
     }
@@ -88,11 +83,7 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
       return res.status(401).json({ error: 'Email ou senha incorretos' });
     }
 
-    // Atualizar último login
-    await supabase
-      .from('usuarios')
-      .update({ ultimo_login: new Date().toISOString() })
-      .eq('id', usuario.id);
+    await query('UPDATE usuarios SET ultimo_login = NOW() WHERE id = $1', [usuario.id]);
 
     const token = gerarToken(usuario.id, usuario.email);
 
@@ -112,13 +103,12 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const { data: usuario, error } = await supabase
-      .from('usuarios')
-      .select('id, email, nome, ativo, data_criacao, ultimo_login')
-      .eq('id', req.usuario?.userId)
-      .single();
+    const usuario = await queryOne(
+      'SELECT id, email, nome, ativo, data_criacao, ultimo_login FROM usuarios WHERE id = $1',
+      [req.usuario?.userId]
+    );
 
-    if (error || !usuario) {
+    if (!usuario) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 

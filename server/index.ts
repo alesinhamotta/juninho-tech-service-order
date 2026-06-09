@@ -7,11 +7,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 
 // Rotas
-import authRoutes from './routes/auth';
-import clientesRoutes from './routes/clientes';
-import produtosRoutes from './routes/produtos';
-import osRoutes from './routes/os';
-import relatoriosRoutes from './routes/relatorios';
+import authRoutes from './routes/auth.js';
+import clientesRoutes from './routes/clientes.js';
+import produtosRoutes from './routes/produtos.js';
+import osRoutes from './routes/os.js';
+import relatoriosRoutes from './routes/relatorios.js';
 
 dotenv.config();
 
@@ -22,7 +22,6 @@ const PORT = process.env.PORT || 3001;
 // MIDDLEWARES GLOBAIS
 // ============================================================================
 
-// Configuração de CORS
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',')
   : ['http://localhost:3000', 'http://localhost:5173'];
@@ -37,26 +36,19 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ============================================================================
-// ROTAS DE SAÚDE E INFORMAÇÃO
+// ROTAS DE SAÚDE
 // ============================================================================
 
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.json({
     sistema: '🔧 JUNINHO.TECH - Service Order System',
     versao: '1.0.0',
     status: 'online',
     timestamp: new Date().toISOString(),
-    endpoints: {
-      auth: '/api/auth',
-      clientes: '/api/clientes',
-      produtos: '/api/produtos',
-      os: '/api/os',
-      relatorios: '/api/relatorios',
-    },
   });
 });
 
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
@@ -71,15 +63,14 @@ app.use('/api/os', osRoutes);
 app.use('/api/relatorios', relatoriosRoutes);
 
 // ============================================================================
-// MIDDLEWARE DE TRATAMENTO DE ERROS
+// TRATAMENTO DE ERROS
 // ============================================================================
 
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('❌ Erro não tratado:', err.message);
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
 
-// Rota não encontrada
 app.use((req, res) => {
   res.status(404).json({ error: `Rota ${req.method} ${req.path} não encontrada` });
 });
@@ -95,7 +86,6 @@ app.listen(PORT, () => {
   console.log('🔧 ============================================');
   console.log(`✅ Servidor rodando na porta ${PORT}`);
   console.log(`🌐 URL: http://localhost:${PORT}`);
-  console.log(`📋 API: http://localhost:${PORT}/api`);
   console.log('🔧 ============================================');
   console.log('');
 });

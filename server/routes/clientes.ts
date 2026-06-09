@@ -3,36 +3,31 @@
 // ============================================================================
 
 import { Router, Response } from 'express';
-import { supabase } from '../config/database';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { query, queryOne, queryMany } from '../config/database.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
-
-// Todas as rotas de clientes exigem autenticação
 router.use(authMiddleware);
 
 // ============================================================================
-// GET /api/clientes - Listar todos os clientes
+// GET /api/clientes - Listar todos os clientes ativos
 // ============================================================================
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const { search } = req.query;
 
-    let query = supabase
-      .from('clientes')
-      .select('*')
-      .eq('ativo', true)
-      .order('nome', { ascending: true });
+    let sql = `SELECT * FROM clientes WHERE ativo = true`;
+    const params: unknown[] = [];
 
     if (search) {
-      query = query.or(`nome.ilike.%${search}%,telefone.ilike.%${search}%,email.ilike.%${search}%`);
+      params.push(`%${search}%`);
+      sql += ` AND (nome ILIKE $1 OR telefone ILIKE $1 OR email ILIKE $1)`;
     }
 
-    const { data, error } = await query;
+    sql += ` ORDER BY nome ASC`;
 
-    if (error) throw error;
-
-    return res.json({ data, total: data?.length || 0 });
+    const data = await queryMany(sql, params);
+    return res.json({ data, total: data.length });
   } catch (error) {
     console.error('Erro ao listar clientes:', error);
     return res.status(500).json({ error: 'Erro interno ao listar clientes' });
@@ -44,18 +39,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
-
-    const { data: cliente, error } = await supabase
-      .from('clientes')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (error || !cliente) {
-      return res.status(404).json({ error: 'Cliente não encontrado' });
-    }
-
+    const cliente = await queryOne('SELECT * FROM clientes WHERE id = $1', [req.params.id]);
+    if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado' });
     return res.json(cliente);
   } catch (error) {
     console.error('Erro ao buscar cliente:', error);
@@ -74,29 +59,19 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
     }
 
-    // Verificar se o telefone já está cadastrado
-    const { data: clienteExistente } = await supabase
-      .from('clientes')
-      .select('id')
-      .eq('telefone', telefone)
-      .single();
-
-    if (clienteExistente) {
+    const existente = await queryOne('SELECT id FROM clientes WHERE telefone = $1', [telefone]);
+    if (existente) {
       return res.status(400).json({ error: 'Já existe um cliente com este telefone' });
     }
 
-    const { data: novoCliente, error } = await supabase
-      .from('clientes')
-      .insert([{ nome, telefone, email, endereco, cidade, estado, cep, observacoes }])
-      .select('*')
-      .single();
+    const novoCliente = await queryOne(
+      `INSERT INTO clientes (nome, telefone, email, endereco, cidade, estado, cep, observacoes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [nome, telefone, email || null, endereco || null, cidade || null, estado || null, cep || null, observacoes || null]
+    );
 
-    if (error) throw error;
-
-    return res.status(201).json({
-      message: 'Cliente criado com sucesso',
-      data: novoCliente,
-    });
+    return res.status(201).json({ message: 'Cliente criado com sucesso', data: novoCliente });
   } catch (error) {
     console.error('Erro ao criar cliente:', error);
     return res.status(500).json({ error: 'Erro interno ao criar cliente' });
@@ -108,28 +83,22 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
     const { nome, telefone, email, endereco, cidade, estado, cep, observacoes } = req.body;
 
     if (!nome || !telefone) {
       return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
     }
 
-    const { data: clienteAtualizado, error } = await supabase
-      .from('clientes')
-      .update({ nome, telefone, email, endereco, cidade, estado, cep, observacoes })
-      .eq('id', id)
-      .select('*')
-      .single();
+    const clienteAtualizado = await queryOne(
+      `UPDATE clientes
+       SET nome=$1, telefone=$2, email=$3, endereco=$4, cidade=$5, estado=$6, cep=$7, observacoes=$8
+       WHERE id=$9
+       RETURNING *`,
+      [nome, telefone, email || null, endereco || null, cidade || null, estado || null, cep || null, observacoes || null, req.params.id]
+    );
 
-    if (error || !clienteAtualizado) {
-      return res.status(404).json({ error: 'Cliente não encontrado' });
-    }
-
-    return res.json({
-      message: 'Cliente atualizado com sucesso',
-      data: clienteAtualizado,
-    });
+    if (!clienteAtualizado) return res.status(404).json({ error: 'Cliente não encontrado' });
+    return res.json({ message: 'Cliente atualizado com sucesso', data: clienteAtualizado });
   } catch (error) {
     console.error('Erro ao atualizar cliente:', error);
     return res.status(500).json({ error: 'Erro interno ao atualizar cliente' });
@@ -141,15 +110,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
-
-    const { error } = await supabase
-      .from('clientes')
-      .update({ ativo: false })
-      .eq('id', id);
-
-    if (error) throw error;
-
+    await query('UPDATE clientes SET ativo = false WHERE id = $1', [req.params.id]);
     return res.json({ message: 'Cliente desativado com sucesso' });
   } catch (error) {
     console.error('Erro ao desativar cliente:', error);

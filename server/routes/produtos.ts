@@ -3,12 +3,10 @@
 // ============================================================================
 
 import { Router, Response } from 'express';
-import { supabase } from '../config/database';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { query, queryOne, queryMany } from '../config/database.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
-
-// Todas as rotas de produtos exigem autenticação
 router.use(authMiddleware);
 
 // ============================================================================
@@ -18,25 +16,25 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const { search, categoria } = req.query;
 
-    let query = supabase
-      .from('produtos')
-      .select('*')
-      .eq('ativo', true)
-      .order('nome', { ascending: true });
+    let sql = `SELECT * FROM produtos WHERE ativo = true`;
+    const params: unknown[] = [];
+    let idx = 1;
 
     if (search) {
-      query = query.or(`nome.ilike.%${search}%,categoria.ilike.%${search}%,marca.ilike.%${search}%`);
+      sql += ` AND (nome ILIKE $${idx} OR categoria ILIKE $${idx} OR marca ILIKE $${idx})`;
+      params.push(`%${search}%`);
+      idx++;
     }
-
     if (categoria) {
-      query = query.eq('categoria', categoria);
+      sql += ` AND categoria = $${idx}`;
+      params.push(categoria);
+      idx++;
     }
 
-    const { data, error } = await query;
+    sql += ` ORDER BY nome ASC`;
 
-    if (error) throw error;
-
-    return res.json({ data, total: data?.length || 0 });
+    const data = await queryMany(sql, params);
+    return res.json({ data, total: data.length });
   } catch (error) {
     console.error('Erro ao listar produtos:', error);
     return res.status(500).json({ error: 'Erro interno ao listar produtos' });
@@ -48,18 +46,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
-
-    const { data: produto, error } = await supabase
-      .from('produtos')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (error || !produto) {
-      return res.status(404).json({ error: 'Produto não encontrado' });
-    }
-
+    const produto = await queryOne('SELECT * FROM produtos WHERE id = $1', [req.params.id]);
+    if (!produto) return res.status(404).json({ error: 'Produto não encontrado' });
     return res.json(produto);
   } catch (error) {
     console.error('Erro ao buscar produto:', error);
@@ -78,28 +66,15 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Nome, categoria e preço de venda são obrigatórios' });
     }
 
-    const { data: novoProduto, error } = await supabase
-      .from('produtos')
-      .insert([{
-        nome,
-        categoria,
-        marca,
-        modelo,
-        descricao,
-        preco_custo: preco_custo || null,
-        preco_venda,
-        estoque: estoque || 0,
-        estoque_minimo: estoque_minimo || 5,
-      }])
-      .select('*')
-      .single();
+    const novoProduto = await queryOne(
+      `INSERT INTO produtos (nome, categoria, marca, modelo, descricao, preco_custo, preco_venda, estoque, estoque_minimo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [nome, categoria, marca || null, modelo || null, descricao || null,
+       preco_custo || null, preco_venda, estoque || 0, estoque_minimo || 5]
+    );
 
-    if (error) throw error;
-
-    return res.status(201).json({
-      message: 'Produto criado com sucesso',
-      data: novoProduto,
-    });
+    return res.status(201).json({ message: 'Produto criado com sucesso', data: novoProduto });
   } catch (error) {
     console.error('Erro ao criar produto:', error);
     return res.status(500).json({ error: 'Erro interno ao criar produto' });
@@ -111,28 +86,24 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
     const { nome, categoria, marca, modelo, descricao, preco_custo, preco_venda, estoque, estoque_minimo } = req.body;
 
     if (!nome || !categoria || preco_venda === undefined) {
       return res.status(400).json({ error: 'Nome, categoria e preço de venda são obrigatórios' });
     }
 
-    const { data: produtoAtualizado, error } = await supabase
-      .from('produtos')
-      .update({ nome, categoria, marca, modelo, descricao, preco_custo, preco_venda, estoque, estoque_minimo })
-      .eq('id', id)
-      .select('*')
-      .single();
+    const produtoAtualizado = await queryOne(
+      `UPDATE produtos
+       SET nome=$1, categoria=$2, marca=$3, modelo=$4, descricao=$5,
+           preco_custo=$6, preco_venda=$7, estoque=$8, estoque_minimo=$9
+       WHERE id=$10
+       RETURNING *`,
+      [nome, categoria, marca || null, modelo || null, descricao || null,
+       preco_custo || null, preco_venda, estoque, estoque_minimo, req.params.id]
+    );
 
-    if (error || !produtoAtualizado) {
-      return res.status(404).json({ error: 'Produto não encontrado' });
-    }
-
-    return res.json({
-      message: 'Produto atualizado com sucesso',
-      data: produtoAtualizado,
-    });
+    if (!produtoAtualizado) return res.status(404).json({ error: 'Produto não encontrado' });
+    return res.json({ message: 'Produto atualizado com sucesso', data: produtoAtualizado });
   } catch (error) {
     console.error('Erro ao atualizar produto:', error);
     return res.status(500).json({ error: 'Erro interno ao atualizar produto' });
@@ -144,15 +115,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 // ============================================================================
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
-
-    const { error } = await supabase
-      .from('produtos')
-      .update({ ativo: false })
-      .eq('id', id);
-
-    if (error) throw error;
-
+    await query('UPDATE produtos SET ativo = false WHERE id = $1', [req.params.id]);
     return res.json({ message: 'Produto desativado com sucesso' });
   } catch (error) {
     console.error('Erro ao desativar produto:', error);

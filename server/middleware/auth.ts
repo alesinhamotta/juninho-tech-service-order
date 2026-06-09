@@ -1,32 +1,32 @@
 // ============================================================================
-// MIDDLEWARE DE AUTENTICAÇÃO - Proteção de rotas com JWT
+// MIDDLEWARE DE AUTENTICAÇÃO JWT
 // ============================================================================
 
 import { Request, Response, NextFunction } from 'express';
-import { verificarToken, JWTPayload } from '../utils/auth';
+import jwt from 'jsonwebtoken';
 
 export interface AuthRequest extends Request {
-  usuario?: JWTPayload;
+  usuario?: {
+    userId: string;
+    email: string;
+  };
 }
 
-/**
- * Middleware que verifica o token JWT nas requisições protegidas.
- * O token deve ser enviado no header Authorization: Bearer <token>
- */
-export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
+export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token de autenticação não fornecido' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Token de autenticação não fornecido' });
-      return;
-    }
-
-    const token = authHeader.substring(7);
-    const payload = verificarToken(token);
-    req.usuario = payload;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Token inválido ou expirado' });
+    const secret = process.env.JWT_SECRET || 'juninho-tech-secret-2024';
+    const decoded = jwt.verify(token, secret) as { userId: string; email: string };
+    req.usuario = decoded;
+    return next();
+  } catch {
+    return res.status(401).json({ error: 'Token inválido ou expirado. Faça login novamente.' });
   }
 }

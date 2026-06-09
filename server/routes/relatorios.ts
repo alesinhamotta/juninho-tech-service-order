@@ -3,66 +3,35 @@
 // ============================================================================
 
 import { Router, Response } from 'express';
-import { supabase } from '../config/database';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { queryOne, queryMany } from '../config/database.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
-
-// Todas as rotas de relatórios exigem autenticação
 router.use(authMiddleware);
 
 // ============================================================================
-// GET /api/relatorios/faturamento - Faturamento por mês
-// ============================================================================
-router.get('/faturamento', async (req: AuthRequest, res: Response) => {
-  try {
-    const { data, error } = await supabase
-      .from('v_faturamento_mes')
-      .select('*')
-      .order('mes', { ascending: false })
-      .limit(12);
-
-    if (error) throw error;
-
-    return res.json({ data });
-  } catch (error) {
-    console.error('Erro ao buscar faturamento:', error);
-    return res.status(500).json({ error: 'Erro interno ao buscar faturamento' });
-  }
-});
-
-// ============================================================================
-// GET /api/relatorios/os-resumo - Resumo das ordens de serviço
+// GET /api/relatorios/os-resumo - Resumo geral das OS
 // ============================================================================
 router.get('/os-resumo', async (req: AuthRequest, res: Response) => {
   try {
-    const { data: total, error: e1 } = await supabase
-      .from('service_orders')
-      .select('*', { count: 'exact', head: true });
-
-    const { count: pendentes } = await supabase
-      .from('service_orders')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'PENDENTE');
-
-    const { count: concluidas } = await supabase
-      .from('service_orders')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'CONCLUIDO');
-
-    const { count: pagas } = await supabase
-      .from('service_orders')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'PAGO');
-
-    if (e1) throw e1;
+    const resultado = await queryOne<{
+      total: string; pendentes: string; concluidas: string; pagas: string;
+    }>(
+      `SELECT
+         COUNT(*) AS total,
+         COUNT(*) FILTER (WHERE status = 'PENDENTE') AS pendentes,
+         COUNT(*) FILTER (WHERE status = 'CONCLUIDO') AS concluidas,
+         COUNT(*) FILTER (WHERE status = 'PAGO') AS pagas
+       FROM service_orders`,
+      []
+    );
 
     return res.json({
       data: {
-        total: total || 0,
-        pendentes: pendentes || 0,
-        concluidas: concluidas || 0,
-        pagas: pagas || 0,
+        total: Number(resultado?.total || 0),
+        pendentes: Number(resultado?.pendentes || 0),
+        concluidas: Number(resultado?.concluidas || 0),
+        pagas: Number(resultado?.pagas || 0),
       },
     });
   } catch (error) {
@@ -72,44 +41,51 @@ router.get('/os-resumo', async (req: AuthRequest, res: Response) => {
 });
 
 // ============================================================================
-// GET /api/relatorios/clientes-recorrentes - Clientes com mais OS
+// GET /api/relatorios/faturamento - Faturamento por mês
+// ============================================================================
+router.get('/faturamento', async (req: AuthRequest, res: Response) => {
+  try {
+    const data = await queryMany(
+      `SELECT
+         DATE_TRUNC('month', data_criacao) AS mes,
+         COUNT(*) AS total_os,
+         COUNT(*) FILTER (WHERE status = 'PAGO') AS os_pagas,
+         COALESCE(SUM(valor_final) FILTER (WHERE status = 'PAGO'), 0) AS total_faturado
+       FROM service_orders
+       GROUP BY DATE_TRUNC('month', data_criacao)
+       ORDER BY mes DESC
+       LIMIT 12`,
+      []
+    );
+
+    return res.json({ data });
+  } catch (error) {
+    console.error('Erro ao buscar faturamento:', error);
+    return res.status(500).json({ error: 'Erro interno ao buscar faturamento' });
+  }
+});
+
+// ============================================================================
+// GET /api/relatorios/clientes-recorrentes - Top 10 clientes
 // ============================================================================
 router.get('/clientes-recorrentes', async (req: AuthRequest, res: Response) => {
   try {
-    const { data, error } = await supabase
-      .from('service_orders')
-      .select(`
-        cliente_id,
-        clientes (id, nome, telefone),
-        valor_final
-      `)
-      .neq('status', 'CANCELADO');
+    const data = await queryMany(
+      `SELECT
+         c.id AS cliente_id,
+         c.nome,
+         c.telefone,
+         COUNT(os.id) AS total_os,
+         COALESCE(SUM(os.valor_final), 0) AS valor_total
+       FROM clientes c
+       LEFT JOIN service_orders os ON os.cliente_id = c.id AND os.status != 'CANCELADO'
+       GROUP BY c.id, c.nome, c.telefone
+       ORDER BY total_os DESC
+       LIMIT 10`,
+      []
+    );
 
-    if (error) throw error;
-
-    // Agrupar por cliente
-    const clientesMap: Record<string, { cliente_id: string; nome: string; telefone: string; total_os: number; valor_total: number }> = {};
-
-    data?.forEach((os: any) => {
-      const cid = os.cliente_id;
-      if (!clientesMap[cid]) {
-        clientesMap[cid] = {
-          cliente_id: cid,
-          nome: os.clientes?.nome || '',
-          telefone: os.clientes?.telefone || '',
-          total_os: 0,
-          valor_total: 0,
-        };
-      }
-      clientesMap[cid].total_os += 1;
-      clientesMap[cid].valor_total += Number(os.valor_final || 0);
-    });
-
-    const resultado = Object.values(clientesMap)
-      .sort((a, b) => b.total_os - a.total_os)
-      .slice(0, 10);
-
-    return res.json({ data: resultado });
+    return res.json({ data });
   } catch (error) {
     console.error('Erro ao buscar clientes recorrentes:', error);
     return res.status(500).json({ error: 'Erro interno ao buscar clientes recorrentes' });

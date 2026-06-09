@@ -1,0 +1,22 @@
+# ============================================================
+# CONFIGURAÇÃO DE DEPLOY - Render.com
+# Este arquivo configura o deploy automático do backend
+# ============================================================
+
+services:
+  - type: web
+    name: juninho-tech-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:server
+    startCommand: node dist/server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false   # Você preencherá este valor no painel da Render
+      - key: JWT_SECRET
+        sync: false   # Você preencherá este valor no painel da Render
+      - key: CORS_ORIGIN
+        sync: false   # URL do frontend na Vercel (preenchida após o deploy)
+    healthCheckPath: /health
