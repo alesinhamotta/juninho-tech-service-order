@@ -1,7 +1,7 @@
 // ============================================================================
-// ROTAS DE CLIENTES - /api/clientes
+// ROTAS DE CLIENTES — /api/clientes
+// Sistema Juninho Tech OS v2
 // ============================================================================
-
 import { Router, type Request, type Response } from 'express';
 import { query, queryOne, queryMany } from '../config/database.js';
 import { authMiddleware } from '../middleware/auth.js';
@@ -9,21 +9,17 @@ import { authMiddleware } from '../middleware/auth.js';
 const router = Router();
 router.use(authMiddleware);
 
-// GET /api/clientes - Listar todos os clientes ativos
+// GET /api/clientes — Listar clientes ativos
 router.get('/', async (req: Request, res: Response) => {
   try {
     const search = req.query['search'] as string | undefined;
-
     let sql = `SELECT * FROM clientes WHERE ativo = true`;
     const params: unknown[] = [];
-
     if (search) {
       params.push(`%${search}%`);
       sql += ` AND (nome ILIKE $1 OR telefone ILIKE $1 OR email ILIKE $1)`;
     }
-
     sql += ` ORDER BY nome ASC`;
-
     const data = await queryMany(sql, params);
     res.json({ data, total: data.length });
   } catch (error) {
@@ -32,44 +28,36 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/clientes/:id - Obter cliente específico
+// GET /api/clientes/:id — Obter cliente específico
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const cliente = await queryOne('SELECT * FROM clientes WHERE id = $1', [req.params['id']]);
-    if (!cliente) {
-      res.status(404).json({ error: 'Cliente nao encontrado' });
-      return;
-    }
-    res.json(cliente);
+    if (!cliente) { res.status(404).json({ error: 'Cliente não encontrado' }); return; }
+    res.json({ data: cliente });
   } catch (error) {
     console.error('Erro ao buscar cliente:', error);
     res.status(500).json({ error: 'Erro interno ao buscar cliente' });
   }
 });
 
-// POST /api/clientes - Criar novo cliente
+// POST /api/clientes — Criar novo cliente
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { nome, telefone, email, endereco, cidade, estado, cep, observacoes } = req.body as Record<string, string>;
-
+    const { nome, telefone, email, rua, bairro, cidade, estado, cep, observacoes } = req.body as Record<string, string>;
     if (!nome || !telefone) {
-      res.status(400).json({ error: 'Nome e telefone sao obrigatorios' });
+      res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
       return;
     }
-
-    const existente = await queryOne('SELECT id FROM clientes WHERE telefone = $1', [telefone]);
+    const existente = await queryOne('SELECT id FROM clientes WHERE telefone = $1 AND ativo = true', [telefone]);
     if (existente) {
-      res.status(400).json({ error: 'Ja existe um cliente com este telefone' });
+      res.status(400).json({ error: 'Já existe um cliente ativo com este telefone' });
       return;
     }
-
     const novoCliente = await queryOne(
-      `INSERT INTO clientes (nome, telefone, email, endereco, cidade, estado, cep, observacoes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [nome, telefone, email || null, endereco || null, cidade || null, estado || null, cep || null, observacoes || null]
+      `INSERT INTO clientes (nome, telefone, email, rua, bairro, cidade, estado, cep, observacoes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [nome, telefone, email || null, rua || null, bairro || null, cidade || null, estado || null, cep || null, observacoes || null]
     );
-
     res.status(201).json({ message: 'Cliente criado com sucesso', data: novoCliente });
   } catch (error) {
     console.error('Erro ao criar cliente:', error);
@@ -77,28 +65,20 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// PUT /api/clientes/:id - Atualizar cliente
+// PUT /api/clientes/:id — Atualizar cliente
 router.put('/:id', async (req: Request, res: Response) => {
   try {
-    const { nome, telefone, email, endereco, cidade, estado, cep, observacoes } = req.body as Record<string, string>;
-
+    const { nome, telefone, email, rua, bairro, cidade, estado, cep, observacoes } = req.body as Record<string, string>;
     if (!nome || !telefone) {
-      res.status(400).json({ error: 'Nome e telefone sao obrigatorios' });
+      res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
       return;
     }
-
     const clienteAtualizado = await queryOne(
-      `UPDATE clientes
-       SET nome=$1, telefone=$2, email=$3, endereco=$4, cidade=$5, estado=$6, cep=$7, observacoes=$8
-       WHERE id=$9
-       RETURNING *`,
-      [nome, telefone, email || null, endereco || null, cidade || null, estado || null, cep || null, observacoes || null, req.params['id']]
+      `UPDATE clientes SET nome=$1, telefone=$2, email=$3, rua=$4, bairro=$5,
+       cidade=$6, estado=$7, cep=$8, observacoes=$9 WHERE id=$10 RETURNING *`,
+      [nome, telefone, email || null, rua || null, bairro || null, cidade || null, estado || null, cep || null, observacoes || null, req.params['id']]
     );
-
-    if (!clienteAtualizado) {
-      res.status(404).json({ error: 'Cliente nao encontrado' });
-      return;
-    }
+    if (!clienteAtualizado) { res.status(404).json({ error: 'Cliente não encontrado' }); return; }
     res.json({ message: 'Cliente atualizado com sucesso', data: clienteAtualizado });
   } catch (error) {
     console.error('Erro ao atualizar cliente:', error);
@@ -106,7 +86,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/clientes/:id - Desativar cliente (soft delete)
+// DELETE /api/clientes/:id — Desativar cliente (soft delete)
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     await query('UPDATE clientes SET ativo = false WHERE id = $1', [req.params['id']]);

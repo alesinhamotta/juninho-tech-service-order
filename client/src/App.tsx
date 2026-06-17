@@ -14,6 +14,7 @@ import NovaOS from './pages/NovaOS';
 import Clientes from './pages/Clientes';
 import Produtos from './pages/Produtos';
 import Relatorios from './pages/Relatorios';
+import DetalhesOS from './pages/DetalhesOS';
 
 // Layout
 import Layout from './components/Layout';
@@ -59,6 +60,7 @@ function AppRoutes() {
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="os" element={<ListaOS />} />
         <Route path="os/nova" element={<NovaOS />} />
+        <Route path="os/:id" element={<DetalhesOS />} />
         <Route path="clientes" element={<Clientes />} />
         <Route path="produtos" element={<Produtos />} />
         <Route path="relatorios" element={<Relatorios />} />
