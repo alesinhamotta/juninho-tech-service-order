@@ -1,18 +1,16 @@
 // ============================================================================
-// ROTAS DE RELATÓRIOS - /api/relatorios
+// ROTAS DE RELATORIOS - /api/relatorios
 // ============================================================================
 
-import { Router, Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { queryOne, queryMany } from '../config/database.js';
-import { authMiddleware, AuthRequest } from '../middleware/auth.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authMiddleware);
 
-// ============================================================================
 // GET /api/relatorios/os-resumo - Resumo geral das OS
-// ============================================================================
-router.get('/os-resumo', async (req: AuthRequest, res: Response) => {
+router.get('/os-resumo', async (_req: Request, res: Response) => {
   try {
     const resultado = await queryOne<{
       total: string; pendentes: string; concluidas: string; pagas: string;
@@ -26,7 +24,7 @@ router.get('/os-resumo', async (req: AuthRequest, res: Response) => {
       []
     );
 
-    return res.json({
+    res.json({
       data: {
         total: Number(resultado?.total || 0),
         pendentes: Number(resultado?.pendentes || 0),
@@ -36,14 +34,12 @@ router.get('/os-resumo', async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error('Erro ao buscar resumo de OS:', error);
-    return res.status(500).json({ error: 'Erro interno ao buscar resumo de OS' });
+    res.status(500).json({ error: 'Erro interno ao buscar resumo de OS' });
   }
 });
 
-// ============================================================================
-// GET /api/relatorios/faturamento - Faturamento por mês
-// ============================================================================
-router.get('/faturamento', async (req: AuthRequest, res: Response) => {
+// GET /api/relatorios/faturamento - Faturamento por mes
+router.get('/faturamento', async (_req: Request, res: Response) => {
   try {
     const data = await queryMany(
       `SELECT
@@ -58,17 +54,15 @@ router.get('/faturamento', async (req: AuthRequest, res: Response) => {
       []
     );
 
-    return res.json({ data });
+    res.json({ data });
   } catch (error) {
     console.error('Erro ao buscar faturamento:', error);
-    return res.status(500).json({ error: 'Erro interno ao buscar faturamento' });
+    res.status(500).json({ error: 'Erro interno ao buscar faturamento' });
   }
 });
 
-// ============================================================================
 // GET /api/relatorios/clientes-recorrentes - Top 10 clientes
-// ============================================================================
-router.get('/clientes-recorrentes', async (req: AuthRequest, res: Response) => {
+router.get('/clientes-recorrentes', async (_req: Request, res: Response) => {
   try {
     const data = await queryMany(
       `SELECT
@@ -85,10 +79,10 @@ router.get('/clientes-recorrentes', async (req: AuthRequest, res: Response) => {
       []
     );
 
-    return res.json({ data });
+    res.json({ data });
   } catch (error) {
     console.error('Erro ao buscar clientes recorrentes:', error);
-    return res.status(500).json({ error: 'Erro interno ao buscar clientes recorrentes' });
+    res.status(500).json({ error: 'Erro interno ao buscar clientes recorrentes' });
   }
 });
 

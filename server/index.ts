@@ -2,7 +2,7 @@
 // SERVIDOR PRINCIPAL - JUNINHO.TECH Service Order System
 // ============================================================================
 
-import express from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
@@ -16,14 +16,15 @@ import relatoriosRoutes from './routes/relatorios.js';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env['PORT'] || 3001;
 
 // ============================================================================
 // MIDDLEWARES GLOBAIS
 // ============================================================================
 
-const corsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',')
+const corsOrigin = process.env['CORS_ORIGIN'];
+const corsOrigins = corsOrigin
+  ? corsOrigin.split(',')
   : ['http://localhost:3000', 'http://localhost:5173'];
 
 app.use(cors({
@@ -39,16 +40,16 @@ app.use(express.urlencoded({ extended: true }));
 // ROTAS DE SAÚDE
 // ============================================================================
 
-app.get('/', (_req, res) => {
+app.get('/', (_req: Request, res: Response) => {
   res.json({
-    sistema: '🔧 JUNINHO.TECH - Service Order System',
+    sistema: 'JUNINHO.TECH - Service Order System',
     versao: '1.0.0',
     status: 'online',
     timestamp: new Date().toISOString(),
   });
 });
 
-app.get('/health', (_req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
@@ -66,13 +67,13 @@ app.use('/api/relatorios', relatoriosRoutes);
 // TRATAMENTO DE ERROS
 // ============================================================================
 
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('❌ Erro não tratado:', err.message);
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('Erro nao tratado:', err.message);
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
 
-app.use((req, res) => {
-  res.status(404).json({ error: `Rota ${req.method} ${req.path} não encontrada` });
+app.use((req: Request, res: Response) => {
+  res.status(404).json({ error: `Rota ${req.method} ${req.path} nao encontrada` });
 });
 
 // ============================================================================
@@ -80,14 +81,8 @@ app.use((req, res) => {
 // ============================================================================
 
 app.listen(PORT, () => {
-  console.log('');
-  console.log('🔧 ============================================');
-  console.log('   JUNINHO.TECH - Service Order System');
-  console.log('🔧 ============================================');
-  console.log(`✅ Servidor rodando na porta ${PORT}`);
-  console.log(`🌐 URL: http://localhost:${PORT}`);
-  console.log('🔧 ============================================');
-  console.log('');
+  console.log('JUNINHO.TECH - Service Order System iniciado');
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
 
 export default app;
