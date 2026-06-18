@@ -116,37 +116,38 @@ router.post('/', async (req: Request, res: Response) => {
     // INSERT com todos os parâmetros numerados sequencialmente (sem literal 'ABERTA' no meio)
     const novaOS = await queryOne<Record<string, unknown>>(
       `INSERT INTO service_orders (
-        numero_os, cliente_id, status,
+        numero_os, cliente_id, tipo, status,
         aparelho_marca, aparelho_modelo, aparelho_cor, aparelho_imei,
         acessorios, problema_descrito, diagnostico, servico_realizado,
         garantia_dias, valor_pecas, valor_servico, valor_final,
         leva_traz, endereco_coleta, observacoes
       ) VALUES (
-        $1, $2, $3,
-        $4, $5, $6, $7,
-        $8, $9, $10, $11,
-        $12, $13, $14, $15,
-        $16, $17, $18
+        $1, $2, $3, $4,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12,
+        $13, $14, $15, $16,
+        $17, $18, $19
       ) RETURNING *`,
       [
         numero_os,                          // $1
         cliente_id,                         // $2
-        'ABERTA',                           // $3
-        aparelho_marca || null,             // $4
-        aparelho_modelo || null,            // $5
-        aparelho_cor || null,               // $6
-        aparelho_imei || null,              // $7
-        acessorios || null,                 // $8
-        problema_descrito || null,          // $9
-        diagnostico || null,                // $10
-        servico_realizado || null,          // $11
-        Number(garantia_dias) || 90,        // $12
-        Number(valor_pecas) || 0,           // $13
-        Number(valor_servico) || 0,         // $14
-        Number(valor_final) || 0,           // $15
-        leva_traz === true || leva_traz === 'true' ? true : false, // $16
-        endereco_coleta || null,            // $17
-        observacoes || null,                // $18
+        'REPARO',                           // $3 tipo (obrigatorio no banco)
+        'ABERTA',                           // $4 status
+        aparelho_marca || null,             // $5
+        aparelho_modelo || null,            // $6
+        aparelho_cor || null,               // $7
+        aparelho_imei || null,              // $8
+        acessorios || null,                 // $9
+        problema_descrito || null,          // $10
+        diagnostico || null,                // $11
+        servico_realizado || null,          // $12
+        Number(garantia_dias) || 90,        // $13
+        Number(valor_pecas) || 0,           // $14
+        Number(valor_servico) || 0,         // $15
+        Number(valor_final) || 0,           // $16
+        leva_traz === true || leva_traz === 'true' ? true : false, // $17
+        endereco_coleta || null,            // $18
+        observacoes || null,                // $19
       ]
     );
 
