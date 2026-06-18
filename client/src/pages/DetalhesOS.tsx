@@ -18,6 +18,8 @@ interface OS {
   id: string;
   numero_os: string;
   status: string;
+  status_pagamento?: string;
+  pago_em?: string;
   aparelho_marca: string;
   aparelho_modelo: string;
   aparelho_cor?: string;
@@ -36,17 +38,16 @@ interface OS {
   desconto: number;
   forma_pagamento?: string;
   parcelas?: number;
-  // Financeiro interno
+  // Financeiro interno (nomes corretos do banco)
   taxa_maquininha?: number;
-  valor_taxa?: number;
-  valor_recebido?: number;
-  custo_pecas?: number;
+  taxa_maquininha_valor?: number;
+  valor_recebido_liquido?: number;
   custo_servico?: number;
-  custo_total_os?: number;
-  lucro_total_os?: number;
-  margem_lucro_os?: number;
-  brinde_descricao?: string;
-  brinde_custo?: number;
+  custo_brinde?: number;
+  custo_total?: number;
+  lucro_liquido?: number;
+  margem_percentual?: number;
+  descricao_brinde?: string;
   // Datas
   data_criacao: string;
   data_conclusao?: string;
@@ -74,9 +75,19 @@ const FORMA_LABELS: Record<string, string> = {
   DEBITO: 'Cartao de Debito', PARCELADO: 'Parcelado', PENDENTE: 'Pendente',
 };
 
+const FORMAS_PAGAMENTO = [
+  { value: 'PENDENTE',  label: 'Pendente (definir depois)' },
+  { value: 'PIX',       label: 'Pix' },
+  { value: 'DINHEIRO',  label: 'Dinheiro' },
+  { value: 'DEBITO',    label: 'Cartao de Debito' },
+  { value: 'CREDITO',   label: 'Cartao de Credito (1x)' },
+  { value: 'PARCELADO', label: 'Cartao Parcelado' },
+];
+
 const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 const fmtPct = (v: number) => (v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
 const fmtData = (d?: string) => d ? new Date(d).toLocaleDateString('pt-BR') : '-';
+const fmtDataHora = (d?: string) => d ? new Date(d).toLocaleString('pt-BR') : '-';
 
 // ─── Componente ─────────────────────────────────────────────────────────────
 export default function DetalhesOS() {
@@ -87,16 +98,25 @@ export default function DetalhesOS() {
   const [atualizando, setAtualizando] = useState(false);
   const [editando, setEditando] = useState(false);
   const [editFinanceiro, setEditFinanceiro] = useState(false);
+  const [confirmandoPagamento, setConfirmandoPagamento] = useState(false);
 
   const [campos, setCampos] = useState({
     diagnostico: '', servico_realizado: '', valor_servico: '', observacoes: '',
   });
 
   const [camposFinanceiro, setCamposFinanceiro] = useState({
-    forma_pagamento: 'PENDENTE', parcelas: 1,
-    taxa_maquininha: 0, desconto: 0,
-    custo_pecas: 0, custo_servico: 0,
-    brinde_descricao: '', brinde_custo: 0,
+    forma_pagamento: 'PENDENTE',
+    parcelas: 1,
+    taxa_maquininha: 0,
+    desconto: 0,
+    custo_servico: 0,
+    descricao_brinde: '',
+    custo_brinde: 0,
+  });
+
+  const [pagForm, setPagForm] = useState({
+    forma_pagamento: 'PIX',
+    parcelas: 1,
   });
 
   const carregarOS = () => {
@@ -117,10 +137,13 @@ export default function DetalhesOS() {
           parcelas: data.parcelas || 1,
           taxa_maquininha: data.taxa_maquininha || 0,
           desconto: data.desconto || 0,
-          custo_pecas: data.custo_pecas || 0,
           custo_servico: data.custo_servico || 0,
-          brinde_descricao: data.brinde_descricao || '',
-          brinde_custo: data.brinde_custo || 0,
+          descricao_brinde: data.descricao_brinde || '',
+          custo_brinde: data.custo_brinde || 0,
+        });
+        setPagForm({
+          forma_pagamento: data.forma_pagamento || 'PIX',
+          parcelas: data.parcelas || 1,
         });
       })
       .catch(console.error)
@@ -136,8 +159,8 @@ export default function DetalhesOS() {
       await api.patch(`/os/${id}/status`, { status: novoStatus });
       carregarOS();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      alert(msg || 'Erro ao atualizar status.');
+      const msg = (err as { response?: { data?: { error?: string; detalhe?: string } } })?.response?.data;
+      alert(msg?.detalhe || msg?.error || 'Erro ao atualizar status.');
     } finally { setAtualizando(false); }
   };
 
@@ -168,6 +191,34 @@ export default function DetalhesOS() {
     } finally { setAtualizando(false); }
   };
 
+  const handleConfirmarPagamento = async () => {
+    setAtualizando(true);
+    try {
+      await api.patch(`/os/${id}/pagamento`, {
+        status_pagamento: 'PAGO',
+        forma_pagamento: pagForm.forma_pagamento,
+        parcelas: pagForm.parcelas,
+      });
+      setConfirmandoPagamento(false);
+      carregarOS();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      alert(msg || 'Erro ao confirmar pagamento.');
+    } finally { setAtualizando(false); }
+  };
+
+  const handleEstornarPagamento = async () => {
+    if (!confirm('Deseja estornar o pagamento e marcar como A RECEBER?')) return;
+    setAtualizando(true);
+    try {
+      await api.patch(`/os/${id}/pagamento`, { status_pagamento: 'A_RECEBER' });
+      carregarOS();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      alert(msg || 'Erro ao estornar pagamento.');
+    } finally { setAtualizando(false); }
+  };
+
   if (carregando) {
     return <div className="flex items-center justify-center py-20"><p className="text-gray-400">Carregando OS...</p></div>;
   }
@@ -181,8 +232,10 @@ export default function DetalhesOS() {
   }
 
   const statusCfg = STATUS_CONFIG[os.status] || { label: os.status, classe: '' };
-  const lucro = os.lucro_total_os || 0;
-  const margem = os.margem_lucro_os || 0;
+  const lucro = os.lucro_liquido || 0;
+  const margem = os.margem_percentual || 0;
+  const isPago = os.status_pagamento === 'PAGO';
+  const valorFinalBruto = (os.valor_final || 0) + (os.desconto || 0);
 
   return (
     <div className="max-w-3xl mx-auto space-y-5 pb-10">
@@ -205,9 +258,82 @@ export default function DetalhesOS() {
         </button>
       </div>
 
+      {/* ── Status de Pagamento ── */}
+      <div className={`jt-card ${isPago ? 'border-green-300' : 'border-orange-300'}`}
+        style={{ border: `2px solid ${isPago ? '#86efac' : '#fdba74'}`, background: isPago ? '#f0fdf4' : '#fff7ed' }}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full ${isPago ? 'bg-green-500' : 'bg-orange-400'}`} style={{ boxShadow: isPago ? '0 0 6px #22c55e' : '0 0 6px #fb923c' }} />
+            <div>
+              <p className="font-bold text-base" style={{ color: isPago ? '#166534' : '#c2410c' }}>
+                {isPago ? 'PAGO' : 'A RECEBER'}
+              </p>
+              {isPago && os.pago_em && (
+                <p className="text-xs text-gray-500">Pago em {fmtDataHora(os.pago_em)}</p>
+              )}
+              {!isPago && (
+                <p className="text-xs text-gray-500">Aguardando confirmacao de pagamento</p>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {!isPago && !confirmandoPagamento && (
+              <button onClick={() => setConfirmandoPagamento(true)}
+                className="btn-jt py-2 px-4 text-sm font-bold"
+                style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}>
+                Confirmar Pagamento
+              </button>
+            )}
+            {isPago && (
+              <button onClick={handleEstornarPagamento} disabled={atualizando}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium text-orange-600"
+                style={{ background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.3)' }}>
+                Estornar
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Formulário de confirmação de pagamento */}
+        {confirmandoPagamento && !isPago && (
+          <div className="mt-4 pt-4 border-t border-orange-200 space-y-3">
+            <p className="text-sm font-semibold text-gray-700">Confirmar recebimento de <span style={{ color: '#e91e8c' }}>{fmt(os.valor_final)}</span></p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label text-xs">Forma de pagamento</label>
+                <select className="input-field" value={pagForm.forma_pagamento}
+                  onChange={(e) => setPagForm({ ...pagForm, forma_pagamento: e.target.value })}>
+                  {FORMAS_PAGAMENTO.filter(f => f.value !== 'PENDENTE').map((fp) =>
+                    <option key={fp.value} value={fp.value}>{fp.label}</option>
+                  )}
+                </select>
+              </div>
+              {(pagForm.forma_pagamento === 'PARCELADO' || pagForm.forma_pagamento === 'CREDITO') && (
+                <div>
+                  <label className="label text-xs">Numero de parcelas</label>
+                  <input type="number" min="1" max="24" className="input-field"
+                    value={pagForm.parcelas}
+                    onChange={(e) => setPagForm({ ...pagForm, parcelas: parseInt(e.target.value) || 1 })} />
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={handleConfirmarPagamento} disabled={atualizando}
+                className="btn-jt py-2 px-5 text-sm"
+                style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}>
+                {atualizando ? 'Salvando...' : 'Confirmar Pago'}
+              </button>
+              <button onClick={() => setConfirmandoPagamento(false)} className="btn-secondary py-2 px-4 text-sm">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ── Alterar Status ── */}
       <div className="jt-card" style={{ background: 'linear-gradient(135deg, rgba(233,30,140,0.04), rgba(0,180,255,0.04))', border: '1px solid rgba(233,30,140,0.12)' }}>
-        <h2 className="section-title">Alterar Status</h2>
+        <h2 className="section-title">Alterar Status da OS</h2>
         <div className="flex flex-wrap gap-2">
           {Object.entries(STATUS_CONFIG).map(([val, cfg]) => (
             <button key={val} onClick={() => setNovoStatus(val)}
@@ -311,11 +437,11 @@ export default function DetalhesOS() {
           <h2 className="section-title">Pecas e Materiais</h2>
           <div className="space-y-2">
             {os.itens.map((item) => (
-              <div key={item.id} className={`flex items-center justify-between py-2 border-b border-gray-50 last:border-0 ${item.eh_brinde ? 'opacity-60' : ''}`}>
+              <div key={item.id} className={`flex items-center justify-between py-2 border-b border-gray-50 last:border-0 ${item.eh_brinde ? 'opacity-70' : ''}`}>
                 <div>
                   <p className="text-sm font-medium text-gray-900">
                     {item.descricao_manual}
-                    {item.eh_brinde && <span className="ml-2 text-xs text-pink-400">[brinde]</span>}
+                    {item.eh_brinde && <span className="ml-2 text-xs text-pink-400 font-semibold">[brinde]</span>}
                   </p>
                   <p className="text-xs text-gray-400">Qtd: {item.quantidade} x {fmt(item.preco_unitario)}</p>
                 </div>
@@ -328,14 +454,23 @@ export default function DetalhesOS() {
         </div>
       )}
 
-      {/* ── Valores do cliente ── */}
+      {/* ── Valores para o Cliente ── */}
       <div className="jt-card" style={{ background: 'linear-gradient(135deg, rgba(233,30,140,0.05), rgba(0,180,255,0.05))', border: '1px solid rgba(233,30,140,0.15)' }}>
-        <h2 className="section-title">Valores</h2>
+        <h2 className="section-title">Valores (visivel ao cliente)</h2>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between text-gray-600"><span>Pecas e materiais:</span><span className="font-medium">{fmt(os.valor_pecas)}</span></div>
           <div className="flex justify-between text-gray-600"><span>Mao de obra / servico:</span><span className="font-medium">{fmt(os.valor_servico)}</span></div>
           {(os.desconto || 0) > 0 && (
-            <div className="flex justify-between text-green-600"><span>Desconto:</span><span className="font-medium">- {fmt(os.desconto)}</span></div>
+            <>
+              <div className="flex justify-between text-gray-400 text-xs">
+                <span>Valor original:</span>
+                <span className="line-through">{fmt(valorFinalBruto)}</span>
+              </div>
+              <div className="flex justify-between text-green-600">
+                <span>Desconto concedido:</span>
+                <span className="font-medium">- {fmt(os.desconto)}</span>
+              </div>
+            </>
           )}
           {os.forma_pagamento && os.forma_pagamento !== 'PENDENTE' && (
             <div className="flex justify-between text-gray-500 text-xs">
@@ -352,11 +487,11 @@ export default function DetalhesOS() {
       </div>
 
       {/* ── Financeiro Interno ── */}
-      <div className="jt-card" style={{ border: '1px solid rgba(233,30,140,0.2)' }}>
+      <div className="jt-card" style={{ border: '2px solid rgba(233,30,140,0.25)' }}>
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="section-title mb-0" style={{ color: '#e91e8c' }}>Financeiro Interno</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Nao aparece para o cliente</p>
+            <p className="text-xs text-gray-400 mt-0.5">Nao aparece para o cliente — apenas ADM</p>
           </div>
           {!editFinanceiro && (
             <button onClick={() => setEditFinanceiro(true)} className="text-xs px-3 py-1.5 rounded-lg font-medium"
@@ -372,11 +507,11 @@ export default function DetalhesOS() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-3 rounded-xl text-center" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
                 <p className="text-xs text-gray-500 mb-1">Voce recebe</p>
-                <p className="text-base font-bold text-green-700">{fmt(os.valor_recebido || os.valor_final)}</p>
+                <p className="text-base font-bold text-green-700">{fmt(os.valor_recebido_liquido || os.valor_final)}</p>
               </div>
               <div className="p-3 rounded-xl text-center" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
                 <p className="text-xs text-gray-500 mb-1">Custo total</p>
-                <p className="text-base font-bold text-red-600">{fmt(os.custo_total_os || 0)}</p>
+                <p className="text-base font-bold text-red-600">{fmt(os.custo_total || 0)}</p>
               </div>
               <div className="p-3 rounded-xl text-center" style={{ background: lucro >= 0 ? '#f0fdf4' : '#fef2f2', border: `1px solid ${lucro >= 0 ? '#bbf7d0' : '#fecaca'}` }}>
                 <p className="text-xs text-gray-500 mb-1">Lucro liquido</p>
@@ -393,21 +528,27 @@ export default function DetalhesOS() {
               {(os.taxa_maquininha || 0) > 0 && (
                 <div className="flex justify-between text-gray-500">
                   <span>Taxa maquininha ({os.taxa_maquininha}%):</span>
-                  <span className="text-red-500 font-medium">- {fmt(os.valor_taxa || 0)}</span>
+                  <span className="text-red-500 font-medium">- {fmt(os.taxa_maquininha_valor || 0)}</span>
                 </div>
               )}
               <div className="flex justify-between text-gray-500">
                 <span>Custo das pecas:</span>
-                <span className="font-medium">- {fmt(os.custo_pecas || 0)}</span>
+                <span className="font-medium text-red-400">- {fmt((os.custo_total || 0) - (os.custo_servico || 0) - (os.custo_brinde || 0))}</span>
               </div>
               <div className="flex justify-between text-gray-500">
                 <span>Custo do servico:</span>
-                <span className="font-medium">- {fmt(os.custo_servico || 0)}</span>
+                <span className="font-medium text-red-400">- {fmt(os.custo_servico || 0)}</span>
               </div>
-              {(os.brinde_custo || 0) > 0 && (
+              {(os.custo_brinde || 0) > 0 && (
                 <div className="flex justify-between text-gray-500">
-                  <span>Brinde ({os.brinde_descricao || 'brinde'}):</span>
-                  <span className="font-medium text-pink-500">- {fmt(os.brinde_custo || 0)}</span>
+                  <span>Brinde ({os.descricao_brinde || 'brinde'}):</span>
+                  <span className="font-medium text-pink-500">- {fmt(os.custo_brinde || 0)}</span>
+                </div>
+              )}
+              {(os.desconto || 0) > 0 && (
+                <div className="flex justify-between text-gray-500">
+                  <span>Desconto concedido:</span>
+                  <span className="font-medium text-orange-500">- {fmt(os.desconto || 0)}</span>
                 </div>
               )}
             </div>
@@ -418,24 +559,30 @@ export default function DetalhesOS() {
               <div>
                 <label className="label">Forma de pagamento</label>
                 <select className="input-field" value={camposFinanceiro.forma_pagamento}
-                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, forma_pagamento: e.target.value })}>
-                  {Object.entries(FORMA_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  onChange={(e) => {
+                    const f = e.target.value;
+                    const taxaSugerida = f === 'DEBITO' ? 2 : f === 'CREDITO' ? 5 : f === 'PARCELADO' ? 10 : 0;
+                    setCamposFinanceiro({ ...camposFinanceiro, forma_pagamento: f, taxa_maquininha: taxaSugerida });
+                  }}>
+                  {FORMAS_PAGAMENTO.map((fp) => <option key={fp.value} value={fp.value}>{fp.label}</option>)}
                 </select>
               </div>
-              {(camposFinanceiro.forma_pagamento === 'PARCELADO') && (
+              {(camposFinanceiro.forma_pagamento === 'PARCELADO' || camposFinanceiro.forma_pagamento === 'CREDITO') && (
                 <div>
                   <label className="label">Parcelas</label>
-                  <input type="number" min="2" max="24" className="input-field"
+                  <input type="number" min="1" max="24" className="input-field"
                     value={camposFinanceiro.parcelas}
                     onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, parcelas: parseInt(e.target.value) || 1 })} />
                 </div>
               )}
-              <div>
-                <label className="label text-pink-500">Taxa maquininha (%)</label>
-                <input type="number" step="0.01" min="0" max="100" className="input-field"
-                  value={camposFinanceiro.taxa_maquininha}
-                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, taxa_maquininha: parseFloat(e.target.value) || 0 })} />
-              </div>
+              {camposFinanceiro.forma_pagamento !== 'PIX' && camposFinanceiro.forma_pagamento !== 'DINHEIRO' && camposFinanceiro.forma_pagamento !== 'PENDENTE' && (
+                <div>
+                  <label className="label text-pink-500">Taxa maquininha (%)</label>
+                  <input type="number" step="0.01" min="0" max="100" className="input-field"
+                    value={camposFinanceiro.taxa_maquininha}
+                    onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, taxa_maquininha: parseFloat(e.target.value) || 0 })} />
+                </div>
+              )}
               <div>
                 <label className="label">Desconto (R$)</label>
                 <input type="number" step="0.01" min="0" className="input-field"
@@ -443,28 +590,22 @@ export default function DetalhesOS() {
                   onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, desconto: parseFloat(e.target.value) || 0 })} />
               </div>
               <div>
-                <label className="label text-pink-500">Custo das pecas (R$)</label>
-                <input type="number" step="0.01" min="0" className="input-field"
-                  value={camposFinanceiro.custo_pecas}
-                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, custo_pecas: parseFloat(e.target.value) || 0 })} />
-              </div>
-              <div>
-                <label className="label text-pink-500">Custo do servico (R$)</label>
+                <label className="label text-pink-500">Custo do servico (R$) [interno]</label>
                 <input type="number" step="0.01" min="0" className="input-field"
                   value={camposFinanceiro.custo_servico}
                   onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, custo_servico: parseFloat(e.target.value) || 0 })} />
               </div>
               <div>
                 <label className="label text-pink-500">Descricao do brinde</label>
-                <input className="input-field" value={camposFinanceiro.brinde_descricao}
-                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, brinde_descricao: e.target.value })}
+                <input className="input-field" value={camposFinanceiro.descricao_brinde}
+                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, descricao_brinde: e.target.value })}
                   placeholder="Ex: Pelicula de vidro..." />
               </div>
               <div>
-                <label className="label text-pink-500">Custo do brinde (R$)</label>
+                <label className="label text-pink-500">Custo do brinde (R$) [interno]</label>
                 <input type="number" step="0.01" min="0" className="input-field"
-                  value={camposFinanceiro.brinde_custo}
-                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, brinde_custo: parseFloat(e.target.value) || 0 })} />
+                  value={camposFinanceiro.custo_brinde}
+                  onChange={(e) => setCamposFinanceiro({ ...camposFinanceiro, custo_brinde: parseFloat(e.target.value) || 0 })} />
               </div>
             </div>
             <div className="flex gap-3">

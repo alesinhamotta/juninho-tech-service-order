@@ -25,14 +25,14 @@ function calcularFinanceiro(params: {
 }) {
   const { valorFinal, desconto, taxaMaquininha, custoPecas, custoServico, custoBrinde } = params;
 
-  // Valor que o cliente paga (já inclui o acréscimo do cartão se houver)
-  const valorBruto = valorFinal - desconto;
+  // Valor que o cliente paga (após desconto)
+  const valorComDesconto = Math.max(0, valorFinal - desconto);
 
-  // Taxa da maquininha sobre o valor bruto
-  const taxaValor = parseFloat(((valorBruto * taxaMaquininha) / 100).toFixed(2));
+  // Taxa da maquininha sobre o valor com desconto
+  const taxaValor = parseFloat(((valorComDesconto * taxaMaquininha) / 100).toFixed(2));
 
   // Valor que o técnico efetivamente recebe (após taxa)
-  const valorRecebidoLiquido = parseFloat((valorBruto - taxaValor).toFixed(2));
+  const valorRecebidoLiquido = parseFloat((valorComDesconto - taxaValor).toFixed(2));
 
   // Custo total = peças + serviço + brindes
   const custoTotal = parseFloat((custoPecas + custoServico + custoBrinde).toFixed(2));
@@ -58,6 +58,7 @@ router.get('/', async (req: Request, res: Response) => {
         os.id, os.numero_os, os.status, os.aparelho_marca, os.aparelho_modelo,
         os.valor_final, os.desconto, os.forma_pagamento, os.parcelas,
         os.custo_total, os.lucro_liquido, os.margem_percentual, os.valor_recebido_liquido,
+        os.status_pagamento, os.pago_em,
         os.data_criacao, os.leva_traz,
         c.nome AS cliente_nome, c.telefone AS cliente_telefone
       FROM service_orders os
@@ -147,7 +148,7 @@ router.post('/', async (req: Request, res: Response) => {
       custo_pecas, custo_servico,
       taxa_maquininha, forma_pagamento, parcelas,
       desconto,
-      descricao_brinde, custo_brinde,
+      descricao_brinde, brinde_descricao, custo_brinde,
       // Logística
       leva_traz, endereco_coleta, observacoes, itens,
     } = req.body as Record<string, unknown>;
@@ -175,6 +176,7 @@ router.post('/', async (req: Request, res: Response) => {
     const cPecas = Number(custo_pecas) || 0;
     const cServico = Number(custo_servico) || 0;
     const cBrinde = Number(custo_brinde) || 0;
+    const descBrinde = String(descricao_brinde || brinde_descricao || '');
 
     const fin = calcularFinanceiro({
       valorFinal: vFinal,
@@ -197,6 +199,7 @@ router.post('/', async (req: Request, res: Response) => {
         descricao_brinde, custo_brinde,
         custo_servico, custo_total,
         lucro_liquido, margem_percentual, valor_recebido_liquido,
+        status_pagamento,
         leva_traz, endereco_coleta, observacoes
       ) VALUES (
         $1, $2, $3, $4,
@@ -208,7 +211,8 @@ router.post('/', async (req: Request, res: Response) => {
         $22, $23,
         $24, $25,
         $26, $27, $28,
-        $29, $30, $31
+        $29,
+        $30, $31, $32
       ) RETURNING *`,
       [
         numero_os,                          // $1
@@ -228,20 +232,21 @@ router.post('/', async (req: Request, res: Response) => {
         Number(valor_servico) || 0,         // $15
         vFinal,                             // $16
         vDesconto,                          // $17
-        String(forma_pagamento || 'PIX'),   // $18
+        String(forma_pagamento || 'PENDENTE'), // $18
         Number(parcelas) || 1,              // $19
         taxa,                               // $20 taxa_maquininha %
         fin.taxaValor,                      // $21 taxa_maquininha_valor R$
-        descricao_brinde || null,           // $22
+        descBrinde || null,                 // $22
         cBrinde,                            // $23
         cServico,                           // $24 custo_servico
         fin.custoTotal,                     // $25 custo_total
         fin.lucroLiquido,                   // $26 lucro_liquido
         fin.margemPercentual,               // $27 margem_percentual
         fin.valorRecebidoLiquido,           // $28 valor_recebido_liquido
-        leva_traz === true || leva_traz === 'true' ? true : false, // $29
-        endereco_coleta || null,            // $30
-        observacoes || null,                // $31
+        'A_RECEBER',                        // $29 status_pagamento padrão
+        leva_traz === true || leva_traz === 'true' ? true : false, // $30
+        endereco_coleta || null,            // $31
+        observacoes || null,                // $32
       ]
     );
 
@@ -258,7 +263,7 @@ router.post('/', async (req: Request, res: Response) => {
         const custo = Number(item['custo_unitario'] || 0);
         const subtotalItem = qtd * preco;
         const custoItem = qtd * custo;
-        const descricao = String(item['descricao_manual'] || item['descricao'] || '');
+        const descricao = String(item['descricao_manual'] || item['descricao'] || item['nome'] || '');
         const catItem = String(item['categoria_item'] || 'PRODUTO');
         const ehBrinde = item['eh_brinde'] === true || item['eh_brinde'] === 'true';
         await query(
@@ -303,7 +308,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const {
       diagnostico, servico_realizado, valor_servico, valor_pecas, valor_final,
       custo_pecas, custo_servico, taxa_maquininha, forma_pagamento, parcelas,
-      desconto, descricao_brinde, custo_brinde,
+      desconto, descricao_brinde, brinde_descricao, custo_brinde,
       observacoes, aparelho_marca, aparelho_modelo, aparelho_cor, aparelho_imei,
       acessorios, problema_descrito, garantia_dias,
     } = req.body as Record<string, unknown>;
@@ -319,6 +324,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const cPecas = custo_pecas != null ? Number(custo_pecas) : Number(osAtual['custo_pecas'] || 0);
     const cServico = custo_servico != null ? Number(custo_servico) : Number(osAtual['custo_servico'] || 0);
     const cBrinde = custo_brinde != null ? Number(custo_brinde) : Number(osAtual['custo_brinde'] || 0);
+    const descBrinde = String(descricao_brinde || brinde_descricao || osAtual['descricao_brinde'] || '');
 
     const fin = calcularFinanceiro({
       valorFinal: vFinal,
@@ -365,11 +371,11 @@ router.put('/:id', async (req: Request, res: Response) => {
         Number(valor_pecas) || Number(osAtual['valor_pecas'] || 0),
         vFinal,
         vDesconto,
-        String(forma_pagamento || osAtual['forma_pagamento'] || 'PIX'),
+        String(forma_pagamento || osAtual['forma_pagamento'] || 'PENDENTE'),
         Number(parcelas) || Number(osAtual['parcelas'] || 1),
         taxa,
         fin.taxaValor,
-        descricao_brinde || osAtual['descricao_brinde'] || null,
+        descBrinde || null,
         cBrinde,
         cServico,
         fin.custoTotal,
@@ -400,19 +406,89 @@ router.put('/:id', async (req: Request, res: Response) => {
 router.patch('/:id/status', async (req: Request, res: Response) => {
   try {
     const { status } = req.body as { status: string };
+
+    if (!status) {
+      res.status(400).json({ error: 'Campo status é obrigatório' });
+      return;
+    }
+
     if (!STATUS_VALIDOS.includes(status)) {
       res.status(400).json({ error: `Status inválido. Use: ${STATUS_VALIDOS.join(', ')}` });
       return;
     }
-    const atualizado = await queryOne(
-      `UPDATE service_orders SET status = $1, data_atualizacao = NOW() WHERE id = $2 RETURNING id, numero_os, status`,
-      [status, req.params['id']]
-    );
-    if (!atualizado) { res.status(404).json({ error: 'OS não encontrada' }); return; }
+
+    // Verifica se a coluna data_atualizacao existe antes de tentar usar
+    let sql = `UPDATE service_orders SET status = $1`;
+    const params: unknown[] = [status];
+
+    // Tenta atualizar data_atualizacao se existir
+    try {
+      sql += `, data_atualizacao = NOW()`;
+    } catch (_) {
+      // ignora se não existir
+    }
+
+    sql += ` WHERE id = $2 RETURNING id, numero_os, status`;
+    params.push(req.params['id']);
+
+    const atualizado = await queryOne(sql, params);
+
+    if (!atualizado) {
+      res.status(404).json({ error: 'OS não encontrada' });
+      return;
+    }
+
     res.json({ message: 'Status atualizado com sucesso', data: atualizado });
   } catch (error) {
-    console.error('Erro ao atualizar status:', error);
-    res.status(500).json({ error: 'Erro interno ao atualizar status' });
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao atualizar status:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao atualizar status', detalhe: errMsg });
+  }
+});
+
+// PATCH /api/os/:id/pagamento — Confirmar pagamento (A_RECEBER → PAGO)
+router.patch('/:id/pagamento', async (req: Request, res: Response) => {
+  try {
+    const { status_pagamento, forma_pagamento, parcelas } = req.body as Record<string, unknown>;
+
+    const statusValidos = ['A_RECEBER', 'PAGO'];
+    const statusPag = String(status_pagamento || 'PAGO');
+
+    if (!statusValidos.includes(statusPag)) {
+      res.status(400).json({ error: 'status_pagamento deve ser A_RECEBER ou PAGO' });
+      return;
+    }
+
+    const pagoEm = statusPag === 'PAGO' ? new Date().toISOString() : null;
+
+    const updates: string[] = ['status_pagamento = $1', 'pago_em = $2'];
+    const params: unknown[] = [statusPag, pagoEm];
+    let idx = 3;
+
+    if (forma_pagamento) {
+      updates.push(`forma_pagamento = $${idx++}`);
+      params.push(String(forma_pagamento));
+    }
+    if (parcelas) {
+      updates.push(`parcelas = $${idx++}`);
+      params.push(Number(parcelas));
+    }
+
+    params.push(req.params['id']);
+    const sql = `UPDATE service_orders SET ${updates.join(', ')} WHERE id = $${idx} RETURNING id, numero_os, status, status_pagamento, pago_em, forma_pagamento, parcelas`;
+
+    const atualizado = await queryOne(sql, params);
+
+    if (!atualizado) {
+      res.status(404).json({ error: 'OS não encontrada' });
+      return;
+    }
+
+    res.json({ message: `Pagamento marcado como ${statusPag}`, data: atualizado });
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao atualizar pagamento:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao atualizar pagamento', detalhe: errMsg });
   }
 });
 

@@ -290,7 +290,7 @@ export function gerarPDFOS(os: OSParaPDF): void {
   }
 
   // ── VALORES ──
-  checkY(30);
+  checkY(35);
   secaoTitulo('Resumo Financeiro');
 
   const colVal = margin + contentW - 40;
@@ -302,27 +302,45 @@ export function gerarPDFOS(os: OSParaPDF): void {
 
   doc.text('Mao de obra / servico:', margin + 2, y);
   doc.text(formatarMoeda(os.valor_servico), colVal + 38, y, { align: 'right' });
-  y += 5;
+  y += 6;
 
-  // Desconto (se houver)
+  // Desconto com valor original riscado
   if (os.desconto && os.desconto > 0) {
-    setFont(8, 'normal', '#dc2626');
-    doc.text('Desconto concedido:', margin + 2, y);
+    const valorOriginal = os.valor_final + os.desconto;
+
+    // Linha: valor original riscado
+    setFont(8, 'normal', '#9ca3af');
+    const valorOrigStr = formatarMoeda(valorOriginal);
+    const xValOrig = colVal + 38;
+    doc.text('Subtotal:', margin + 2, y);
+    doc.text(valorOrigStr, xValOrig, y, { align: 'right' });
+    // Linha de risco sobre o valor original
+    const larguraTexto = doc.getTextWidth(valorOrigStr);
+    const [rg2, gg2, bg2] = hexToRgb('#9ca3af');
+    doc.setDrawColor(rg2, gg2, bg2);
+    doc.setLineWidth(0.4);
+    doc.line(xValOrig - larguraTexto, y - 0.5, xValOrig, y - 0.5);
+    y += 5;
+
+    // Linha: desconto em verde
+    setFont(8, 'bold', '#16a34a');
+    doc.text('Desconto especial:', margin + 2, y);
     doc.text('- ' + formatarMoeda(os.desconto), colVal + 38, y, { align: 'right' });
     y += 5;
   }
 
   linhaDivisoria(ROSA);
 
+  // Total final destacado
   const [rr, gr, br] = hexToRgb(ROSA);
   doc.setFillColor(rr, gr, br);
-  setFont(11, 'bold', ROSA);
-  doc.text('TOTAL:', margin + 2, y + 5);
+  setFont(12, 'bold', ROSA);
+  doc.text('TOTAL A PAGAR:', margin + 2, y + 5);
   doc.text(formatarMoeda(os.valor_final), colVal + 38, y + 5, { align: 'right' });
-  y += 7;
+  y += 8;
 
   // Forma de pagamento (visível ao cliente)
-  if (os.forma_pagamento) {
+  if (os.forma_pagamento && os.forma_pagamento !== 'PENDENTE') {
     const fpLabel: Record<string, string> = {
       PIX: 'Pix / Transferencia',
       DINHEIRO: 'Dinheiro',
