@@ -187,8 +187,9 @@ router.post('/', async (req: Request, res: Response) => {
 
     res.status(201).json({ message: 'OS criada com sucesso', data: { ...novaOS, cliente } });
   } catch (error) {
-    console.error('Erro ao criar OS:', error);
-    res.status(500).json({ error: 'Erro interno ao criar OS' });
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao criar OS:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao criar OS', detalhe: errMsg });
   }
 });
 
