@@ -102,28 +102,81 @@ router.post('/', async (req: Request, res: Response) => {
     const clienteExiste = await queryOne('SELECT id FROM clientes WHERE id = $1', [cliente_id]);
     if (!clienteExiste) { res.status(400).json({ error: 'Cliente não encontrado' }); return; }
 
+    // Gerar numero_os único: OS-YYYYMMDD-NNNN
+    const hoje = new Date();
+    const dataStr = hoje.getFullYear().toString() +
+      String(hoje.getMonth() + 1).padStart(2, '0') +
+      String(hoje.getDate()).padStart(2, '0');
+    const countResult = await queryOne<{ total: string }>(
+      `SELECT COUNT(*) AS total FROM service_orders WHERE data_criacao::date = CURRENT_DATE`
+    );
+    const seq = String(Number(countResult?.total || 0) + 1).padStart(4, '0');
+    const numero_os = `OS-${dataStr}-${seq}`;
+
+    // INSERT com todos os parâmetros numerados sequencialmente (sem literal 'ABERTA' no meio)
     const novaOS = await queryOne<Record<string, unknown>>(
       `INSERT INTO service_orders (
-        cliente_id, status, aparelho_marca, aparelho_modelo, aparelho_cor, aparelho_imei,
+        numero_os, cliente_id, status,
+        aparelho_marca, aparelho_modelo, aparelho_cor, aparelho_imei,
         acessorios, problema_descrito, diagnostico, servico_realizado,
         garantia_dias, valor_pecas, valor_servico, valor_final,
         leva_traz, endereco_coleta, observacoes
-      ) VALUES ($1,'ABERTA',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      ) VALUES (
+        $1, $2, $3,
+        $4, $5, $6, $7,
+        $8, $9, $10, $11,
+        $12, $13, $14, $15,
+        $16, $17, $18
+      ) RETURNING *`,
       [
-        cliente_id, aparelho_marca || null, aparelho_modelo || null,
-        aparelho_cor || null, aparelho_imei || null, acessorios || null,
-        problema_descrito || null, diagnostico || null, servico_realizado || null,
-        garantia_dias || 90, valor_pecas || 0, valor_servico || 0, valor_final || 0,
-        leva_traz || false, endereco_coleta || null, observacoes || null,
+        numero_os,                          // $1
+        cliente_id,                         // $2
+        'ABERTA',                           // $3
+        aparelho_marca || null,             // $4
+        aparelho_modelo || null,            // $5
+        aparelho_cor || null,               // $6
+        aparelho_imei || null,              // $7
+        acessorios || null,                 // $8
+        problema_descrito || null,          // $9
+        diagnostico || null,                // $10
+        servico_realizado || null,          // $11
+        Number(garantia_dias) || 90,        // $12
+        Number(valor_pecas) || 0,           // $13
+        Number(valor_servico) || 0,         // $14
+        Number(valor_final) || 0,           // $15
+        leva_traz === true || leva_traz === 'true' ? true : false, // $16
+        endereco_coleta || null,            // $17
+        observacoes || null,                // $18
       ]
     );
 
+    if (!novaOS) {
+      res.status(500).json({ error: 'Erro ao criar OS no banco de dados' });
+      return;
+    }
+
+    // Inserir itens/peças da OS
     if (Array.isArray(itens) && itens.length > 0) {
       for (const item of itens as Array<Record<string, unknown>>) {
+        const qtd = Number(item['quantidade'] || 1);
+        const preco = Number(item['preco_unitario'] || 0);
+        const subtotalItem = qtd * preco;
+        const descricao = String(item['descricao_manual'] || item['descricao'] || '');
         await query(
-          `INSERT INTO itens_os (os_id, produto_id, descricao_manual, quantidade, preco_unitario)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [novaOS!['id'], item['produto_id'] || null, item['descricao_manual'] || null, item['quantidade'] || 1, item['preco_unitario'] || 0]
+          `INSERT INTO itens_os (
+            os_id, produto_id, descricao, descricao_manual,
+            quantidade, preco_unitario, subtotal, tipo
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            novaOS['id'],
+            item['produto_id'] || null,
+            descricao,
+            descricao,
+            qtd,
+            preco,
+            subtotalItem,
+            'PRODUTO',
+          ]
         );
       }
     }
@@ -150,22 +203,35 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     const atualizado = await queryOne<Record<string, unknown>>(
       `UPDATE service_orders SET
-        diagnostico=COALESCE($1,diagnostico), servico_realizado=COALESCE($2,servico_realizado),
-        valor_servico=COALESCE($3,valor_servico), valor_pecas=COALESCE($4,valor_pecas),
-        valor_final=COALESCE($5,valor_final), observacoes=COALESCE($6,observacoes),
-        aparelho_marca=COALESCE($7,aparelho_marca), aparelho_modelo=COALESCE($8,aparelho_modelo),
-        aparelho_cor=COALESCE($9,aparelho_cor), aparelho_imei=COALESCE($10,aparelho_imei),
-        acessorios=COALESCE($11,acessorios), problema_descrito=COALESCE($12,problema_descrito),
-        garantia_dias=COALESCE($13,garantia_dias)
-      WHERE id=$14 RETURNING *`,
+        diagnostico        = COALESCE($1, diagnostico),
+        servico_realizado  = COALESCE($2, servico_realizado),
+        valor_servico      = COALESCE($3, valor_servico),
+        valor_pecas        = COALESCE($4, valor_pecas),
+        valor_final        = COALESCE($5, valor_final),
+        observacoes        = COALESCE($6, observacoes),
+        aparelho_marca     = COALESCE($7, aparelho_marca),
+        aparelho_modelo    = COALESCE($8, aparelho_modelo),
+        aparelho_cor       = COALESCE($9, aparelho_cor),
+        aparelho_imei      = COALESCE($10, aparelho_imei),
+        acessorios         = COALESCE($11, acessorios),
+        problema_descrito  = COALESCE($12, problema_descrito),
+        garantia_dias      = COALESCE($13, garantia_dias)
+      WHERE id = $14
+      RETURNING *`,
       [
-        diagnostico || null, servico_realizado || null,
-        valor_servico != null ? valor_servico : null,
-        valor_pecas != null ? valor_pecas : null,
-        valor_final != null ? valor_final : null,
-        observacoes || null, aparelho_marca || null, aparelho_modelo || null,
-        aparelho_cor || null, aparelho_imei || null, acessorios || null,
-        problema_descrito || null, garantia_dias || null,
+        diagnostico || null,
+        servico_realizado || null,
+        valor_servico != null ? Number(valor_servico) : null,
+        valor_pecas != null ? Number(valor_pecas) : null,
+        valor_final != null ? Number(valor_final) : null,
+        observacoes || null,
+        aparelho_marca || null,
+        aparelho_modelo || null,
+        aparelho_cor || null,
+        aparelho_imei || null,
+        acessorios || null,
+        problema_descrito || null,
+        garantia_dias ? Number(garantia_dias) : null,
         req.params['id'],
       ]
     );
@@ -201,7 +267,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
     }
 
     const atualizado = await queryOne<Record<string, unknown>>(
-      `UPDATE service_orders SET status=$1${extraSQL} WHERE id=$2 RETURNING *`,
+      `UPDATE service_orders SET status = $1${extraSQL} WHERE id = $2 RETURNING *`,
       [status, req.params['id'], ...extraParams]
     );
 
