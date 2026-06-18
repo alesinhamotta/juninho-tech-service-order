@@ -166,7 +166,7 @@ export default function Login() {
             <p className="text-gray-600 text-xs">Técnico Especializado • Since 2012</p>
             <div className="flex items-center justify-center gap-4 mt-2">
               <a
-                href="https://wa.me/5500000000000"
+                href="https://wa.me/5521973468654"
                 target="_blank"
                 rel="noreferrer"
                 className="text-gray-600 hover:text-green-400 text-xs transition-colors"

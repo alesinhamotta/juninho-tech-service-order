@@ -156,7 +156,7 @@ export function gerarPDFOS(os: OSParaPDF): void {
 
     setFont(7, 'normal', '#9ca3af');
     doc.text('Assistência Técnica de Celulares e Eletrônicos', margin + 32, 19);
-    doc.text('📱 (11) 99999-9999  |  @juninho.tech  |  WhatsApp disponível', margin + 32, 24);
+    doc.text('WhatsApp: (21) 97346-8654  |  Instagram: @juninho.tech', margin + 32, 24);
 
     // Número da OS (destaque)
     const osNumStr = `OS #${String(os.numero_os).padStart(4, '0')}`;
@@ -198,7 +198,7 @@ export function gerarPDFOS(os: OSParaPDF): void {
   }
 
   if (os.leva_traz && os.endereco_coleta) {
-    const h5 = campo('🚗 Endereço de Coleta (Leva e Traz)', os.endereco_coleta, col1, contentW);
+    const h5 = campo('Endereco de Coleta (Leva e Traz)', os.endereco_coleta, col1, contentW);
     y += h5;
   }
 
@@ -326,7 +326,7 @@ export function gerarPDFOS(os: OSParaPDF): void {
 
   // ── RODAPÉ ──
   setFont(7, 'normal', '#9ca3af');
-  doc.text('Juninho.Tech — Assistência Técnica  |  @juninho.tech  |  WhatsApp: (11) 99999-9999', pageW / 2, pageH - 8, { align: 'center' });
+  doc.text('Juninho.Tech - Assistencia Tecnica  |  @juninho.tech  |  WhatsApp: (21) 97346-8654', pageW / 2, pageH - 8, { align: 'center' });
 
   // ─────────────────────────────────────────────────────────
   // PÁGINA 2: TERMO DE GARANTIA
@@ -433,7 +433,7 @@ export function gerarPDFOS(os: OSParaPDF): void {
 
   // Rodapé página 2
   setFont(7, 'normal', '#9ca3af');
-  doc.text('Juninho.Tech — Assistência Técnica  |  @juninho.tech  |  WhatsApp: (11) 99999-9999', pageW / 2, pageH - 8, { align: 'center' });
+  doc.text('Juninho.Tech - Assistencia Tecnica  |  @juninho.tech  |  WhatsApp: (21) 97346-8654', pageW / 2, pageH - 8, { align: 'center' });
 
   // ─────────────────────────────────────────────────────────
   // SALVAR PDF
