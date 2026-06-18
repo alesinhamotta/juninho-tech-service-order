@@ -21,32 +21,31 @@ function calcularFinanceiro(params: {
   taxaMaquininha: number; // percentual, ex: 16.67
   custoPecas: number;
   custoServico: number;
-  brindes: Array<{ custo: number }>;
+  custoBrinde: number;
 }) {
-  const { valorFinal, desconto, taxaMaquininha, custoPecas, custoServico, brindes } = params;
+  const { valorFinal, desconto, taxaMaquininha, custoPecas, custoServico, custoBrinde } = params;
 
   // Valor que o cliente paga (já inclui o acréscimo do cartão se houver)
   const valorBruto = valorFinal - desconto;
 
   // Taxa da maquininha sobre o valor bruto
-  const valorTaxa = parseFloat(((valorBruto * taxaMaquininha) / 100).toFixed(2));
+  const taxaValor = parseFloat(((valorBruto * taxaMaquininha) / 100).toFixed(2));
 
   // Valor que o técnico efetivamente recebe (após taxa)
-  const valorRecebido = parseFloat((valorBruto - valorTaxa).toFixed(2));
+  const valorRecebidoLiquido = parseFloat((valorBruto - taxaValor).toFixed(2));
 
   // Custo total = peças + serviço + brindes
-  const custoBrindes = brindes.reduce((acc, b) => acc + b.custo, 0);
-  const custoTotal = parseFloat((custoPecas + custoServico + custoBrindes).toFixed(2));
+  const custoTotal = parseFloat((custoPecas + custoServico + custoBrinde).toFixed(2));
 
   // Lucro líquido = valor recebido - custo total
-  const lucroTotal = parseFloat((valorRecebido - custoTotal).toFixed(2));
+  const lucroLiquido = parseFloat((valorRecebidoLiquido - custoTotal).toFixed(2));
 
   // Margem = lucro / valor recebido * 100
-  const margemLucro = valorRecebido > 0
-    ? parseFloat(((lucroTotal / valorRecebido) * 100).toFixed(2))
+  const margemPercentual = valorRecebidoLiquido > 0
+    ? parseFloat(((lucroLiquido / valorRecebidoLiquido) * 100).toFixed(2))
     : 0;
 
-  return { valorTaxa, valorRecebido, custoTotal, lucroTotal, margemLucro };
+  return { taxaValor, valorRecebidoLiquido, custoTotal, lucroLiquido, margemPercentual };
 }
 
 // GET /api/os — Listar OS com filtros
@@ -58,7 +57,7 @@ router.get('/', async (req: Request, res: Response) => {
       SELECT
         os.id, os.numero_os, os.status, os.aparelho_marca, os.aparelho_modelo,
         os.valor_final, os.desconto, os.forma_pagamento, os.parcelas,
-        os.custo_total_os, os.lucro_total_os, os.margem_lucro_os, os.valor_recebido,
+        os.custo_total, os.lucro_liquido, os.margem_percentual, os.valor_recebido_liquido,
         os.data_criacao, os.leva_traz,
         c.nome AS cliente_nome, c.telefone AS cliente_telefone
       FROM service_orders os
@@ -148,7 +147,7 @@ router.post('/', async (req: Request, res: Response) => {
       custo_pecas, custo_servico,
       taxa_maquininha, forma_pagamento, parcelas,
       desconto,
-      brinde_descricao, brinde_custo,
+      descricao_brinde, custo_brinde,
       // Logística
       leva_traz, endereco_coleta, observacoes, itens,
     } = req.body as Record<string, unknown>;
@@ -175,7 +174,7 @@ router.post('/', async (req: Request, res: Response) => {
     const taxa = Number(taxa_maquininha) || 0;
     const cPecas = Number(custo_pecas) || 0;
     const cServico = Number(custo_servico) || 0;
-    const cBrinde = Number(brinde_custo) || 0;
+    const cBrinde = Number(custo_brinde) || 0;
 
     const fin = calcularFinanceiro({
       valorFinal: vFinal,
@@ -183,9 +182,10 @@ router.post('/', async (req: Request, res: Response) => {
       taxaMaquininha: taxa,
       custoPecas: cPecas,
       custoServico: cServico,
-      brindes: cBrinde > 0 ? [{ custo: cBrinde }] : [],
+      custoBrinde: cBrinde,
     });
 
+    // Colunas exatamente como existem no banco após as migrações
     const novaOS = await queryOne<Record<string, unknown>>(
       `INSERT INTO service_orders (
         numero_os, cliente_id, tipo, status,
@@ -193,10 +193,10 @@ router.post('/', async (req: Request, res: Response) => {
         acessorios, problema_descrito, diagnostico, servico_realizado,
         garantia_dias, valor_pecas, valor_servico, valor_final,
         desconto, forma_pagamento, parcelas,
-        taxa_maquininha, valor_taxa,
-        brinde_descricao, brinde_custo,
-        custo_pecas, custo_servico, custo_total_os,
-        lucro_total_os, margem_lucro_os, valor_recebido,
+        taxa_maquininha, taxa_maquininha_valor,
+        descricao_brinde, custo_brinde,
+        custo_servico, custo_total,
+        lucro_liquido, margem_percentual, valor_recebido_liquido,
         leva_traz, endereco_coleta, observacoes
       ) VALUES (
         $1, $2, $3, $4,
@@ -206,15 +206,15 @@ router.post('/', async (req: Request, res: Response) => {
         $17, $18, $19,
         $20, $21,
         $22, $23,
-        $24, $25, $26,
-        $27, $28, $29,
-        $30, $31, $32
+        $24, $25,
+        $26, $27, $28,
+        $29, $30, $31
       ) RETURNING *`,
       [
         numero_os,                          // $1
         cliente_id,                         // $2
-        'REPARO',                           // $3
-        'ABERTA',                           // $4
+        'REPARO',                           // $3 tipo (NOT NULL legado)
+        'ABERTA',                           // $4 status
         aparelho_marca || null,             // $5
         aparelho_modelo || null,            // $6
         aparelho_cor || null,               // $7
@@ -227,22 +227,21 @@ router.post('/', async (req: Request, res: Response) => {
         Number(valor_pecas) || 0,           // $14
         Number(valor_servico) || 0,         // $15
         vFinal,                             // $16
-        vDesconto,                          // $17 desconto
-        String(forma_pagamento || 'PENDENTE'), // $18
+        vDesconto,                          // $17
+        String(forma_pagamento || 'PIX'),   // $18
         Number(parcelas) || 1,              // $19
-        taxa,                               // $20 taxa_maquininha (interno)
-        fin.valorTaxa,                      // $21 valor_taxa (interno)
-        brinde_descricao || null,           // $22 (interno)
-        cBrinde,                            // $23 (interno)
-        cPecas,                             // $24 (interno)
-        cServico,                           // $25 (interno)
-        fin.custoTotal,                     // $26 (interno)
-        fin.lucroTotal,                     // $27 (interno)
-        fin.margemLucro,                    // $28 (interno)
-        fin.valorRecebido,                  // $29 (interno)
-        leva_traz === true || leva_traz === 'true' ? true : false, // $30
-        endereco_coleta || null,            // $31
-        observacoes || null,                // $32
+        taxa,                               // $20 taxa_maquininha %
+        fin.taxaValor,                      // $21 taxa_maquininha_valor R$
+        descricao_brinde || null,           // $22
+        cBrinde,                            // $23
+        cServico,                           // $24 custo_servico
+        fin.custoTotal,                     // $25 custo_total
+        fin.lucroLiquido,                   // $26 lucro_liquido
+        fin.margemPercentual,               // $27 margem_percentual
+        fin.valorRecebidoLiquido,           // $28 valor_recebido_liquido
+        leva_traz === true || leva_traz === 'true' ? true : false, // $29
+        endereco_coleta || null,            // $30
+        observacoes || null,                // $31
       ]
     );
 
@@ -304,12 +303,11 @@ router.put('/:id', async (req: Request, res: Response) => {
     const {
       diagnostico, servico_realizado, valor_servico, valor_pecas, valor_final,
       custo_pecas, custo_servico, taxa_maquininha, forma_pagamento, parcelas,
-      desconto, brinde_descricao, brinde_custo,
+      desconto, descricao_brinde, custo_brinde,
       observacoes, aparelho_marca, aparelho_modelo, aparelho_cor, aparelho_imei,
       acessorios, problema_descrito, garantia_dias,
     } = req.body as Record<string, unknown>;
 
-    // Buscar OS atual para recalcular com valores existentes quando não enviados
     const osAtual = await queryOne<Record<string, unknown>>(
       'SELECT * FROM service_orders WHERE id = $1', [req.params['id']]
     );
@@ -320,7 +318,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const taxa = taxa_maquininha != null ? Number(taxa_maquininha) : Number(osAtual['taxa_maquininha'] || 0);
     const cPecas = custo_pecas != null ? Number(custo_pecas) : Number(osAtual['custo_pecas'] || 0);
     const cServico = custo_servico != null ? Number(custo_servico) : Number(osAtual['custo_servico'] || 0);
-    const cBrinde = brinde_custo != null ? Number(brinde_custo) : Number(osAtual['brinde_custo'] || 0);
+    const cBrinde = custo_brinde != null ? Number(custo_brinde) : Number(osAtual['custo_brinde'] || 0);
 
     const fin = calcularFinanceiro({
       valorFinal: vFinal,
@@ -328,58 +326,56 @@ router.put('/:id', async (req: Request, res: Response) => {
       taxaMaquininha: taxa,
       custoPecas: cPecas,
       custoServico: cServico,
-      brindes: cBrinde > 0 ? [{ custo: cBrinde }] : [],
+      custoBrinde: cBrinde,
     });
 
     const atualizado = await queryOne<Record<string, unknown>>(
       `UPDATE service_orders SET
-        diagnostico       = COALESCE($1, diagnostico),
-        servico_realizado = COALESCE($2, servico_realizado),
-        valor_servico     = $3,
-        valor_pecas       = $4,
-        valor_final       = $5,
-        desconto          = $6,
-        forma_pagamento   = $7,
-        parcelas          = $8,
-        taxa_maquininha   = $9,
-        valor_taxa        = $10,
-        brinde_descricao  = $11,
-        brinde_custo      = $12,
-        custo_pecas       = $13,
-        custo_servico     = $14,
-        custo_total_os    = $15,
-        lucro_total_os    = $16,
-        margem_lucro_os   = $17,
-        valor_recebido    = $18,
-        observacoes       = COALESCE($19, observacoes),
-        aparelho_marca    = COALESCE($20, aparelho_marca),
-        aparelho_modelo   = COALESCE($21, aparelho_modelo),
-        aparelho_cor      = COALESCE($22, aparelho_cor),
-        aparelho_imei     = COALESCE($23, aparelho_imei),
-        acessorios        = COALESCE($24, acessorios),
-        problema_descrito = COALESCE($25, problema_descrito),
-        garantia_dias     = COALESCE($26, garantia_dias)
-      WHERE id = $27
-      RETURNING *`,
+        diagnostico           = COALESCE($1, diagnostico),
+        servico_realizado     = COALESCE($2, servico_realizado),
+        valor_servico         = $3,
+        valor_pecas           = $4,
+        valor_final           = $5,
+        desconto              = $6,
+        forma_pagamento       = $7,
+        parcelas              = $8,
+        taxa_maquininha       = $9,
+        taxa_maquininha_valor = $10,
+        descricao_brinde      = $11,
+        custo_brinde          = $12,
+        custo_servico         = $13,
+        custo_total           = $14,
+        lucro_liquido         = $15,
+        margem_percentual     = $16,
+        valor_recebido_liquido= $17,
+        observacoes           = COALESCE($18, observacoes),
+        aparelho_marca        = COALESCE($19, aparelho_marca),
+        aparelho_modelo       = COALESCE($20, aparelho_modelo),
+        aparelho_cor          = COALESCE($21, aparelho_cor),
+        aparelho_imei         = COALESCE($22, aparelho_imei),
+        acessorios            = COALESCE($23, acessorios),
+        problema_descrito     = COALESCE($24, problema_descrito),
+        garantia_dias         = COALESCE($25, garantia_dias),
+        data_atualizacao      = NOW()
+      WHERE id = $26 RETURNING *`,
       [
         diagnostico || null,
         servico_realizado || null,
-        valor_servico != null ? Number(valor_servico) : Number(osAtual['valor_servico'] || 0),
-        valor_pecas != null ? Number(valor_pecas) : Number(osAtual['valor_pecas'] || 0),
+        Number(valor_servico) || Number(osAtual['valor_servico'] || 0),
+        Number(valor_pecas) || Number(osAtual['valor_pecas'] || 0),
         vFinal,
         vDesconto,
-        forma_pagamento ? String(forma_pagamento) : String(osAtual['forma_pagamento'] || 'PENDENTE'),
-        parcelas != null ? Number(parcelas) : Number(osAtual['parcelas'] || 1),
+        String(forma_pagamento || osAtual['forma_pagamento'] || 'PIX'),
+        Number(parcelas) || Number(osAtual['parcelas'] || 1),
         taxa,
-        fin.valorTaxa,
-        brinde_descricao !== undefined ? (brinde_descricao || null) : osAtual['brinde_descricao'],
+        fin.taxaValor,
+        descricao_brinde || osAtual['descricao_brinde'] || null,
         cBrinde,
-        cPecas,
         cServico,
         fin.custoTotal,
-        fin.lucroTotal,
-        fin.margemLucro,
-        fin.valorRecebido,
+        fin.lucroLiquido,
+        fin.margemPercentual,
+        fin.valorRecebidoLiquido,
         observacoes || null,
         aparelho_marca || null,
         aparelho_modelo || null,
@@ -392,14 +388,15 @@ router.put('/:id', async (req: Request, res: Response) => {
       ]
     );
 
-    res.json({ message: 'OS atualizada', data: atualizado });
+    res.json({ message: 'OS atualizada com sucesso', data: atualizado });
   } catch (error) {
-    console.error('Erro ao atualizar OS:', error);
-    res.status(500).json({ error: 'Erro interno ao atualizar OS' });
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao atualizar OS:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao atualizar OS', detalhe: errMsg });
   }
 });
 
-// PATCH /api/os/:id/status — Alterar status
+// PATCH /api/os/:id/status — Atualizar apenas o status
 router.patch('/:id/status', async (req: Request, res: Response) => {
   try {
     const { status } = req.body as { status: string };
@@ -407,86 +404,31 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
       res.status(400).json({ error: `Status inválido. Use: ${STATUS_VALIDOS.join(', ')}` });
       return;
     }
-
-    let extraSQL = '';
-    const extraParams: unknown[] = [];
-    let paramIdx = 3;
-
-    if (['PRONTO', 'SEM_SOLUCAO', 'ORCAMENTO_NEGADO'].includes(status)) {
-      extraSQL += `, data_conclusao = COALESCE(data_conclusao, $${paramIdx++})`;
-      extraParams.push(new Date().toISOString());
-    }
-    if (status === 'ENTREGUE') {
-      extraSQL += `, data_entrega = $${paramIdx++}, data_conclusao = COALESCE(data_conclusao, $${paramIdx++})`;
-      extraParams.push(new Date().toISOString(), new Date().toISOString());
-    }
-
-    const atualizado = await queryOne<Record<string, unknown>>(
-      `UPDATE service_orders SET status = $1${extraSQL} WHERE id = $2 RETURNING *`,
-      [status, req.params['id'], ...extraParams]
+    const atualizado = await queryOne(
+      `UPDATE service_orders SET status = $1, data_atualizacao = NOW() WHERE id = $2 RETURNING id, numero_os, status`,
+      [status, req.params['id']]
     );
-
     if (!atualizado) { res.status(404).json({ error: 'OS não encontrada' }); return; }
-    res.json({ message: 'Status atualizado', data: atualizado });
+    res.json({ message: 'Status atualizado com sucesso', data: atualizado });
   } catch (error) {
     console.error('Erro ao atualizar status:', error);
     res.status(500).json({ error: 'Erro interno ao atualizar status' });
   }
 });
 
-// GET /api/os/financeiro/resumo — Resumo financeiro interno por período
-router.get('/financeiro/resumo', async (req: Request, res: Response) => {
+// DELETE /api/os/:id — Excluir OS
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const { data_inicio, data_fim } = req.query as Record<string, string>;
-
-    let whereClause = `WHERE status NOT IN ('ORCAMENTO_NEGADO')`;
-    const params: unknown[] = [];
-    let idx = 1;
-
-    if (data_inicio) { whereClause += ` AND data_criacao >= $${idx++}`; params.push(data_inicio); }
-    if (data_fim) { whereClause += ` AND data_criacao < ($${idx++}::date + interval '1 day')`; params.push(data_fim); }
-
-    const resumo = await queryOne<Record<string, unknown>>(
-      `SELECT
-        COUNT(*)                                                              AS total_os,
-        COALESCE(SUM(valor_final), 0)                                        AS receita_bruta,
-        COALESCE(SUM(desconto), 0)                                           AS total_descontos,
-        COALESCE(SUM(valor_taxa), 0)                                         AS total_taxas_maquininha,
-        COALESCE(SUM(brinde_custo), 0)                                       AS total_custo_brindes,
-        COALESCE(SUM(valor_recebido), 0)                                     AS receita_liquida,
-        COALESCE(SUM(custo_total_os), 0)                                     AS custo_total,
-        COALESCE(SUM(lucro_total_os), 0)                                     AS lucro_total,
-        CASE WHEN SUM(valor_recebido) > 0
-          THEN ROUND((SUM(lucro_total_os) / SUM(valor_recebido)) * 100, 2)
-          ELSE 0 END                                                          AS margem_media,
-        COALESCE(SUM(custo_pecas), 0)                                        AS custo_pecas_total,
-        COALESCE(SUM(custo_servico), 0)                                      AS custo_servico_total,
-        COALESCE(SUM(CASE WHEN status = 'ENTREGUE' THEN valor_recebido ELSE 0 END), 0) AS faturamento_entregue,
-        -- Por forma de pagamento
-        COALESCE(SUM(CASE WHEN forma_pagamento IN ('PIX','DINHEIRO') THEN valor_final ELSE 0 END), 0) AS total_avista,
-        COALESCE(SUM(CASE WHEN forma_pagamento IN ('CREDITO','DEBITO','PARCELADO') THEN valor_final ELSE 0 END), 0) AS total_cartao
-       FROM service_orders ${whereClause}`,
-      params
+    await query('DELETE FROM itens_os WHERE os_id = $1', [req.params['id']]);
+    const deletado = await queryOne(
+      'DELETE FROM service_orders WHERE id = $1 RETURNING id, numero_os',
+      [req.params['id']]
     );
-
-    // Breakdown por categoria (peças vs serviços nos itens)
-    const whereItens = whereClause.replace('WHERE ', 'WHERE os.');
-    const breakdown = await queryOne<Record<string, unknown>>(
-      `SELECT
-        COALESCE(SUM(CASE WHEN i.categoria_item = 'PRODUTO' AND NOT COALESCE(i.eh_brinde, false) THEN i.subtotal ELSE 0 END), 0)     AS receita_produtos,
-        COALESCE(SUM(CASE WHEN i.categoria_item = 'PRODUTO' AND NOT COALESCE(i.eh_brinde, false) THEN i.custo_total ELSE 0 END), 0)   AS custo_produtos,
-        COALESCE(SUM(CASE WHEN i.categoria_item = 'SERVICO' THEN i.subtotal ELSE 0 END), 0)     AS receita_servicos,
-        COALESCE(SUM(CASE WHEN i.categoria_item = 'SERVICO' THEN i.custo_total ELSE 0 END), 0)  AS custo_servicos
-       FROM itens_os i
-       INNER JOIN service_orders os ON i.os_id = os.id
-       ${whereItens}`,
-      params
-    );
-
-    res.json({ data: { ...resumo, ...breakdown } });
+    if (!deletado) { res.status(404).json({ error: 'OS não encontrada' }); return; }
+    res.json({ message: 'OS excluída com sucesso', data: deletado });
   } catch (error) {
-    console.error('Erro no resumo financeiro:', error);
-    res.status(500).json({ error: 'Erro interno no resumo financeiro' });
+    console.error('Erro ao excluir OS:', error);
+    res.status(500).json({ error: 'Erro interno ao excluir OS' });
   }
 });
 
