@@ -68,7 +68,9 @@ router.get('/faturamento', async (req: Request, res: Response) => {
          TO_CHAR(DATE_TRUNC('month', data_criacao), 'YYYY-MM') AS mes,
          COUNT(*) AS total_os,
          COUNT(*) FILTER (WHERE status = 'ENTREGUE') AS os_entregues,
-         COALESCE(SUM(valor_final) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_faturado
+         COALESCE(SUM(valor_final) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_faturado,
+         COALESCE(SUM(custo_total) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_custo,
+         COALESCE(SUM(lucro_liquido) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_lucro
        FROM service_orders WHERE 1=1${filtroData}
        GROUP BY DATE_TRUNC('month', data_criacao)
        ORDER BY DATE_TRUNC('month', data_criacao) DESC
@@ -130,6 +132,91 @@ router.get('/clientes-recorrentes', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Erro ao buscar clientes recorrentes:', error);
     res.status(500).json({ error: 'Erro interno ao buscar clientes recorrentes' });
+  }
+});
+
+// GET /api/relatorios/fechamento-financeiro — Fechamento financeiro completo (INTERNO)
+// Custo, lucro, margem por produto e serviço — NUNCA expor ao cliente
+router.get('/fechamento-financeiro', async (req: Request, res: Response) => {
+  try {
+    const { data_inicio, data_fim } = req.query as Record<string, string>;
+    let filtroData = '';
+    const params: unknown[] = [];
+    let idx = 1;
+    if (data_inicio) { filtroData += ` AND data_criacao >= $${idx++}`; params.push(data_inicio); }
+    if (data_fim) { filtroData += ` AND data_criacao < ($${idx++}::date + interval '1 day')`; params.push(data_fim); }
+
+    // Totais gerais da OS
+    const totais = await queryOne<Record<string, string>>(
+      `SELECT
+         COUNT(*) FILTER (WHERE custo_total IS NOT NULL AND custo_total > 0) AS total_os_com_dados,
+         COALESCE(SUM(valor_final) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_faturado,
+         COALESCE(SUM(valor_recebido_liquido) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_recebido,
+         COALESCE(SUM(custo_total) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_custo,
+         COALESCE(SUM(taxa_maquininha_valor) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_taxa,
+         COALESCE(SUM(custo_brinde) FILTER (WHERE status = 'ENTREGUE'), 0) AS total_brinde,
+         COALESCE(SUM(lucro_liquido) FILTER (WHERE status = 'ENTREGUE'), 0) AS lucro_liquido,
+         CASE
+           WHEN SUM(valor_recebido_liquido) FILTER (WHERE status = 'ENTREGUE') > 0
+           THEN ROUND(
+             AVG(margem_percentual) FILTER (WHERE status = 'ENTREGUE' AND margem_percentual IS NOT NULL),
+             2
+           )
+           ELSE 0
+         END AS margem_media
+       FROM service_orders WHERE 1=1${filtroData}`,
+      params
+    );
+
+    // Totais por itens — produtos/peças
+    const itensTotais = await queryOne<Record<string, string>>(
+      `SELECT
+         COALESCE(SUM(io.preco_unitario * io.quantidade), 0) AS faturado_produtos,
+         COALESCE(SUM(io.custo_unitario * io.quantidade), 0) AS custo_produtos
+       FROM itens_os io
+       JOIN service_orders so ON so.id = io.os_id
+       WHERE so.status = 'ENTREGUE'${filtroData.replace(/data_criacao/g, 'so.data_criacao')}`,
+      params
+    );
+
+    // Totais de serviço (mão de obra)
+    const servicoTotais = await queryOne<Record<string, string>>(
+      `SELECT
+         COALESCE(SUM(valor_servico), 0) AS faturado_servicos,
+         COALESCE(SUM(custo_servico), 0) AS custo_servicos
+       FROM service_orders
+       WHERE status = 'ENTREGUE'${filtroData}`,
+      params
+    );
+
+    const faturadoProdutos = Number(itensTotais?.faturado_produtos || 0);
+    const custoProdutos = Number(itensTotais?.custo_produtos || 0);
+    const faturadoServicos = Number(servicoTotais?.faturado_servicos || 0);
+    const custoServicos = Number(servicoTotais?.custo_servicos || 0);
+
+    res.json({
+      data: {
+        total_os_com_dados: Number(totais?.total_os_com_dados || 0),
+        total_faturado: Number(totais?.total_faturado || 0),
+        total_recebido: Number(totais?.total_recebido || 0),
+        total_custo: Number(totais?.total_custo || 0),
+        total_taxa: Number(totais?.total_taxa || 0),
+        total_brinde: Number(totais?.total_brinde || 0),
+        lucro_bruto: Number(totais?.total_recebido || 0) - Number(totais?.total_custo || 0),
+        lucro_liquido: Number(totais?.lucro_liquido || 0),
+        margem_media: Number(totais?.margem_media || 0),
+        // Por categoria
+        faturado_produtos: faturadoProdutos,
+        custo_produtos: custoProdutos,
+        lucro_produtos: faturadoProdutos - custoProdutos,
+        faturado_servicos: faturadoServicos,
+        custo_servicos: custoServicos,
+        lucro_servicos: faturadoServicos - custoServicos,
+      },
+    });
+  } catch (error) {
+    console.error('Erro ao buscar fechamento financeiro:', error);
+    res.status(500).json({ error: 'Erro interno ao buscar fechamento financeiro' });
   }
 });
 

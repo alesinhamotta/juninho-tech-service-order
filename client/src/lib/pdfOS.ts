@@ -30,6 +30,9 @@ interface OSParaPDF {
   valor_pecas: number;
   valor_servico: number;
   valor_final: number;
+  desconto?: number;
+  forma_pagamento?: string;
+  parcelas?: number;
   data_criacao: string;
   data_conclusao?: string;
   observacoes?: string;
@@ -293,23 +296,50 @@ export function gerarPDFOS(os: OSParaPDF): void {
   const colVal = margin + contentW - 40;
 
   setFont(8, 'normal', '#6b7280');
-  doc.text('Peças e materiais:', margin + 2, y + 4);
+  doc.text('Pecas e materiais:', margin + 2, y + 4);
   doc.text(formatarMoeda(os.valor_pecas), colVal + 38, y + 4, { align: 'right' });
   y += 7;
 
-  doc.text('Mão de obra / serviço:', margin + 2, y);
+  doc.text('Mao de obra / servico:', margin + 2, y);
   doc.text(formatarMoeda(os.valor_servico), colVal + 38, y, { align: 'right' });
   y += 5;
+
+  // Desconto (se houver)
+  if (os.desconto && os.desconto > 0) {
+    setFont(8, 'normal', '#dc2626');
+    doc.text('Desconto concedido:', margin + 2, y);
+    doc.text('- ' + formatarMoeda(os.desconto), colVal + 38, y, { align: 'right' });
+    y += 5;
+  }
 
   linhaDivisoria(ROSA);
 
   const [rr, gr, br] = hexToRgb(ROSA);
   doc.setFillColor(rr, gr, br);
-  doc.setFillColor(rr, gr, br);
   setFont(11, 'bold', ROSA);
   doc.text('TOTAL:', margin + 2, y + 5);
   doc.text(formatarMoeda(os.valor_final), colVal + 38, y + 5, { align: 'right' });
-  y += 10;
+  y += 7;
+
+  // Forma de pagamento (visível ao cliente)
+  if (os.forma_pagamento) {
+    const fpLabel: Record<string, string> = {
+      PIX: 'Pix / Transferencia',
+      DINHEIRO: 'Dinheiro',
+      CREDITO: 'Cartao de Credito',
+      DEBITO: 'Cartao de Debito',
+      PARCELADO: 'Parcelado no Cartao',
+    };
+    const fpTexto = fpLabel[os.forma_pagamento] || os.forma_pagamento;
+    const parcelasTexto = (os.forma_pagamento === 'PARCELADO' || os.forma_pagamento === 'CREDITO') && os.parcelas && os.parcelas > 1
+      ? ` — ${os.parcelas}x de ${formatarMoeda(os.valor_final / os.parcelas)}`
+      : '';
+    setFont(8, 'normal', '#374151');
+    doc.text(`Forma de pagamento: ${fpTexto}${parcelasTexto}`, margin + 2, y + 3);
+    y += 7;
+  }
+
+  y += 3;
 
   // ── ASSINATURA ──
   checkY(30);
