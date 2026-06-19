@@ -14,7 +14,7 @@ interface ItemOS {
 }
 
 interface OSParaPDF {
-  numero_os: number;
+  numero_os: number | string;
   status: string;
   aparelho_marca: string;
   aparelho_modelo: string;
