@@ -41,3 +41,4 @@ Thumbs.db
 
 # PDF files (generated)
 /generated-pdfs/
+client/dist/
