@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { gerarPDFOS } from '../lib/pdfOS';
+import OSJornada, { type OSAssinatura, type OSEvidencia, type OSEvento } from '../components/OSJornada';
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 interface ItemOS {
@@ -58,6 +59,9 @@ interface OS {
     rua?: string; bairro?: string; cidade?: string; estado?: string; cep?: string;
   };
   itens?: ItemOS[];
+  evidencias?: OSEvidencia[];
+  assinaturas?: OSAssinatura[];
+  eventos?: OSEvento[];
 }
 
 const STATUS_CONFIG: Record<string, { label: string; classe: string }> = {
@@ -352,6 +356,16 @@ export default function DetalhesOS() {
           </div>
         )}
       </div>
+
+      {/* ── Jornada digital: ações, fotos, assinatura e histórico ── */}
+      <OSJornada
+        osId={os.id}
+        clienteNome={os.cliente?.nome || ''}
+        evidencias={os.evidencias || []}
+        assinaturas={os.assinaturas || []}
+        eventos={os.eventos || []}
+        onAtualizar={carregarOS}
+      />
 
       {/* ── Cliente ── */}
       <div className="jt-card">

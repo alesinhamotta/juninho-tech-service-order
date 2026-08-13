@@ -47,6 +47,21 @@ interface OSParaPDF {
     cep?: string;
   };
   itens?: ItemOS[];
+  evidencias?: Array<{
+    id?: string;
+    etapa: 'ANTES' | 'DEPOIS' | 'OUTRO';
+    titulo?: string;
+    arquivo_url: string;
+    mime_type?: string;
+    data_criacao?: string;
+  }>;
+  assinaturas?: Array<{
+    id?: string;
+    tipo: 'COLETA' | 'APROVACAO' | 'ENTREGA';
+    nome_signatario: string;
+    assinatura_data_url: string;
+    data_assinatura?: string;
+  }>;
 }
 
 function formatarMoeda(v: number) {
@@ -360,21 +375,63 @@ export function gerarPDFOS(os: OSParaPDF): void {
   y += 3;
 
   // ── ASSINATURA ──
-  checkY(30);
+  checkY(34);
   y += 8;
   linhaDivisoria();
 
+  const assinaturaCliente = os.assinaturas?.find((assinatura) => assinatura.tipo === 'ENTREGA')
+    || os.assinaturas?.find((assinatura) => assinatura.tipo === 'APROVACAO')
+    || os.assinaturas?.find((assinatura) => assinatura.tipo === 'COLETA');
   setFont(7, 'normal', '#6b7280');
-  const assinY = y + 12;
+  const assinY = y + 18;
   doc.line(margin, assinY, margin + 70, assinY);
   doc.line(pageW - margin - 70, assinY, pageW - margin, assinY);
-  doc.text('Assinatura do Cliente', margin + 35, assinY + 4, { align: 'center' });
+  if (assinaturaCliente?.assinatura_data_url?.startsWith('data:image/')) {
+    try {
+      doc.addImage(assinaturaCliente.assinatura_data_url, 'PNG', margin + 8, assinY - 16, 54, 14);
+    } catch (_) { /* assinatura continua documentada pela linha e pelo nome abaixo */ }
+  }
+  doc.text(assinaturaCliente ? `Cliente: ${assinaturaCliente.nome_signatario}` : 'Assinatura do Cliente', margin + 35, assinY + 4, { align: 'center' });
   doc.text('Responsável Técnico', pageW - margin - 35, assinY + 4, { align: 'center' });
   y = assinY + 10;
 
   // ── RODAPÉ ──
   setFont(7, 'normal', '#9ca3af');
   doc.text('Juninho.Tech - Assistencia Tecnica  |  @juninho.tech  |  WhatsApp: (21) 97346-8654', pageW / 2, pageH - 8, { align: 'center' });
+
+  // ─────────────────────────────────────────────────────────
+  // REGISTRO FOTOGRÁFICO (quando houver fotos antes/depois)
+  // ─────────────────────────────────────────────────────────
+  const fotosParaPdf = (os.evidencias || []).filter((foto) => foto.arquivo_url?.startsWith('data:image/'));
+  if (fotosParaPdf.length > 0) {
+    novaPage();
+    y += 8;
+    secaoTitulo('Registro fotográfico do aparelho');
+    setFont(7.5, 'normal', '#4b5563');
+    doc.text('As imagens abaixo registram o estado do equipamento durante o atendimento.', margin, y);
+    y += 7;
+    for (let i = 0; i < fotosParaPdf.length; i += 1) {
+      const foto = fotosParaPdf[i];
+      const largura = contentW / 2 - 3;
+      const altura = 72;
+      const coluna = i % 2;
+      if (coluna === 0 && i > 0) {
+        checkY(84);
+      }
+      const x = margin + coluna * (largura + 6);
+      if (coluna === 0) y += 2;
+      try {
+        doc.addImage(foto.arquivo_url, foto.mime_type === 'image/png' ? 'PNG' : 'JPEG', x, y, largura, altura);
+      } catch (_) {
+        doc.setDrawColor(180, 180, 180);
+        doc.rect(x, y, largura, altura);
+      }
+      setFont(7, 'bold', '#374151');
+      doc.text(`${foto.etapa === 'ANTES' ? 'ANTES' : foto.etapa === 'DEPOIS' ? 'DEPOIS' : 'REGISTRO'} — ${foto.titulo || 'Foto do aparelho'}`, x, y + altura + 4, { maxWidth: largura });
+      if (coluna === 1) y += altura + 10;
+    }
+    if (fotosParaPdf.length % 2 === 1) y += 82;
+  }
 
   // ─────────────────────────────────────────────────────────
   // PÁGINA 2: TERMO DE GARANTIA
@@ -474,8 +531,13 @@ export function gerarPDFOS(os: OSParaPDF): void {
 
   doc.line(margin, y, margin + 75, y);
   doc.line(pageW - margin - 75, y, pageW - margin, y);
+  if (assinaturaCliente?.assinatura_data_url?.startsWith('data:image/')) {
+    try {
+      doc.addImage(assinaturaCliente.assinatura_data_url, 'PNG', margin + 8, y - 15, 58, 13);
+    } catch (_) { /* preserva a linha para assinatura manual quando necessário */ }
+  }
   setFont(7, 'normal', '#6b7280');
-  doc.text('Assinatura do Cliente', margin + 37, y + 4, { align: 'center' });
+  doc.text(assinaturaCliente ? assinaturaCliente.nome_signatario : 'Assinatura do Cliente', margin + 37, y + 4, { align: 'center' });
   doc.text('Responsável — Juninho.Tech', pageW - margin - 37, y + 4, { align: 'center' });
   y += 10;
 

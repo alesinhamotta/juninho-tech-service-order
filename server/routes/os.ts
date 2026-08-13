@@ -5,6 +5,7 @@
 import { Router, type Request, type Response } from 'express';
 import { query, queryOne, queryMany } from '../config/database.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { enviarAtualizacaoOS } from '../services/whatsapp.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -13,6 +14,78 @@ const STATUS_VALIDOS = [
   'ABERTA', 'EM_ANDAMENTO', 'AGUARDANDO_PECA',
   'PRONTO', 'ENTREGUE', 'SEM_SOLUCAO', 'ORCAMENTO_NEGADO',
 ];
+
+// Ações operacionais que aparecem para a equipe na tela da OS. Nenhuma delas
+// envia WhatsApp neste momento: elas deixam a mensagem preparada na timeline
+// para a integração oficial ser ativada somente após validação humana.
+const ACOES_RAPIDAS = {
+  TECNICO_A_CAMINHO: {
+    codigo: 'TECNICO_A_CAMINHO', titulo: 'Técnico a caminho', status: null,
+    mensagem: 'Olá, {nome}! O técnico da Juninho Tech já está a caminho para realizar o atendimento combinado.',
+  },
+  APARELHO_COLETADO: {
+    codigo: 'APARELHO_COLETADO', titulo: 'Aparelho coletado com segurança', status: 'EM_ANDAMENTO',
+    mensagem: 'Olá, {nome}! Seu aparelho foi coletado com segurança. Assim que a análise ou o serviço for iniciado, avisaremos por aqui.',
+  },
+  ANALISE_CONCLUIDA: {
+    codigo: 'ANALISE_CONCLUIDA', titulo: 'Análise concluída', status: null,
+    mensagem: 'Olá, {nome}! A análise do seu aparelho foi concluída. Em breve enviaremos o orçamento detalhado para sua aprovação.',
+  },
+  SERVICO_INICIADO: {
+    codigo: 'SERVICO_INICIADO', titulo: 'Serviço iniciado', status: 'EM_ANDAMENTO',
+    mensagem: 'Olá, {nome}! O serviço no seu aparelho foi iniciado pela nossa equipe técnica.',
+  },
+  SERVICO_CONCLUIDO: {
+    codigo: 'SERVICO_CONCLUIDO', titulo: 'Serviço concluído', status: 'PRONTO',
+    mensagem: 'Olá, {nome}! Seu aparelho está pronto. Estamos conferindo todos os detalhes antes da entrega.',
+  },
+  SAINDO_PARA_ENTREGA: {
+    codigo: 'SAINDO_PARA_ENTREGA', titulo: 'Saindo para entrega', status: 'PRONTO',
+    mensagem: 'Olá, {nome}! Seu aparelho está a caminho da entrega. Em breve ele estará com você.',
+  },
+  ENTREGUE: {
+    codigo: 'ENTREGUE', titulo: 'Aparelho entregue', status: 'ENTREGUE',
+    mensagem: 'Olá, {nome}! Confirmamos a entrega do seu aparelho. Obrigado por confiar na Juninho Tech!',
+  },
+} as const;
+
+type AcaoRapida = keyof typeof ACOES_RAPIDAS;
+
+type EventoInput = {
+  osId: string;
+  codigo: string;
+  titulo: string;
+  mensagemCliente?: string | null;
+  status?: string | null;
+  notificar?: boolean;
+  notificacaoStatus?: 'PENDENTE' | 'ENVIADO' | 'NAO_ENVIAR' | 'ERRO';
+  criadoPor?: string | null;
+};
+
+async function registrarEvento(evento: EventoInput) {
+  return queryOne<Record<string, unknown>>(
+    `INSERT INTO os_eventos (
+      os_id, codigo, titulo, mensagem_cliente, status_os,
+      notificar_whatsapp, notificacao_status, criado_por
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [
+      evento.osId, evento.codigo, evento.titulo, evento.mensagemCliente || null,
+      evento.status || null, evento.notificar ?? true,
+      evento.notificacaoStatus || (evento.notificar === false ? 'NAO_ENVIAR' : 'PENDENTE'),
+      evento.criadoPor || null,
+    ]
+  );
+}
+
+function labelStatus(status: string) {
+  const labels: Record<string, string> = {
+    ABERTA: 'OS aberta', EM_ANDAMENTO: 'Serviço em andamento',
+    AGUARDANDO_PECA: 'Aguardando peça', PRONTO: 'Serviço pronto',
+    ENTREGUE: 'Aparelho entregue', SEM_SOLUCAO: 'Sem solução',
+    ORCAMENTO_NEGADO: 'Orçamento negado',
+  };
+  return labels[status] || status;
+}
 
 // ─── Função auxiliar: calcular financeiro interno ───────────────────────────
 function calcularFinanceiro(params: {
@@ -115,6 +188,26 @@ router.get('/:id', async (req: Request, res: Response) => {
       [os['id']]
     );
 
+    const [evidencias, assinaturas, eventos] = await Promise.all([
+      queryMany<Record<string, unknown>>(
+        `SELECT id, etapa, titulo, arquivo_url, mime_type, criado_por, data_criacao
+         FROM os_evidencias WHERE os_id = $1 ORDER BY data_criacao ASC`,
+        [os['id']]
+      ),
+      queryMany<Record<string, unknown>>(
+        `SELECT id, tipo, nome_signatario, assinatura_data_url, aceite_termos, data_assinatura
+         FROM os_assinaturas WHERE os_id = $1 ORDER BY data_assinatura ASC`,
+        [os['id']]
+      ),
+      queryMany<Record<string, unknown>>(
+        `SELECT id, codigo, titulo, mensagem_cliente, status_os,
+                notificar_whatsapp, notificacao_status, whatsapp_message_id,
+                notificacao_erro, notificado_em, criado_por, data_evento
+         FROM os_eventos WHERE os_id = $1 ORDER BY data_evento DESC`,
+        [os['id']]
+      ),
+    ]);
+
     const cliente = {
       id: os['cliente_id'], nome: os['cliente_nome'], telefone: os['cliente_telefone'],
       email: os['cliente_email'], rua: os['cliente_rua'], bairro: os['cliente_bairro'],
@@ -129,6 +222,9 @@ router.get('/:id', async (req: Request, res: Response) => {
           ...i,
           descricao_manual: i['descricao_manual'] || i['produto_nome'] || '',
         })),
+        evidencias,
+        assinaturas,
+        eventos,
       },
     });
   } catch (error) {
@@ -294,11 +390,215 @@ router.post('/', async (req: Request, res: Response) => {
       'SELECT nome, telefone FROM clientes WHERE id = $1', [cliente_id]
     );
 
+    await registrarEvento({
+      osId: String(novaOS['id']),
+      codigo: 'OS_CRIADA',
+      titulo: 'Ordem de serviço criada',
+      mensagemCliente: 'Recebemos sua solicitação e sua ordem de serviço foi registrada.',
+      status: 'ABERTA',
+      notificar: false,
+      criadoPor: 'Sistema',
+    });
+
     res.status(201).json({ message: 'OS criada com sucesso', data: { ...novaOS, cliente } });
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error('Erro ao criar OS:', errMsg);
     res.status(500).json({ error: 'Erro interno ao criar OS', detalhe: errMsg });
+  }
+});
+
+// POST /api/os/:id/evidencias — Salvar foto ou evidência do equipamento
+router.post('/:id/evidencias', async (req: Request, res: Response) => {
+  try {
+    const { etapa, titulo, arquivo_url, mime_type, criado_por } = req.body as Record<string, unknown>;
+    const etapaNormalizada = String(etapa || '').toUpperCase();
+    const arquivo = String(arquivo_url || '');
+
+    if (!['ANTES', 'DEPOIS', 'OUTRO'].includes(etapaNormalizada)) {
+      res.status(400).json({ error: 'Etapa deve ser ANTES, DEPOIS ou OUTRO.' });
+      return;
+    }
+    if (!arquivo || (!arquivo.startsWith('data:image/') && !/^https?:\/\//i.test(arquivo))) {
+      res.status(400).json({ error: 'Envie uma imagem válida ou uma URL HTTPS.' });
+      return;
+    }
+    if (arquivo.startsWith('data:image/') && arquivo.length > 3_500_000) {
+      res.status(413).json({ error: 'A foto ficou grande demais. Tente uma imagem menor.' });
+      return;
+    }
+
+    const evidencia = await queryOne<Record<string, unknown>>(
+      `INSERT INTO os_evidencias (os_id, etapa, titulo, arquivo_url, mime_type, criado_por)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [req.params['id'], etapaNormalizada, String(titulo || ''), arquivo, String(mime_type || ''), String(criado_por || '')]
+    );
+
+    if (!evidencia) { res.status(500).json({ error: 'Não foi possível salvar a evidência.' }); return; }
+    await registrarEvento({
+      osId: req.params['id'], codigo: `FOTO_${etapaNormalizada}`,
+      titulo: `Foto ${etapaNormalizada.toLowerCase()} registrada`,
+      notificar: false,
+    });
+    res.status(201).json({ message: 'Evidência salva com sucesso', data: evidencia });
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao salvar evidência:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao salvar evidência', detalhe: errMsg });
+  }
+});
+
+// POST /api/os/:id/assinaturas — Salvar aceite capturado na tela
+router.post('/:id/assinaturas', async (req: Request, res: Response) => {
+  try {
+    const { tipo, nome_signatario, assinatura_data_url, aceite_termos } = req.body as Record<string, unknown>;
+    const tipoNormalizado = String(tipo || '').toUpperCase();
+    const assinatura = String(assinatura_data_url || '');
+
+    if (!['COLETA', 'APROVACAO', 'ENTREGA'].includes(tipoNormalizado)) {
+      res.status(400).json({ error: 'Tipo deve ser COLETA, APROVACAO ou ENTREGA.' });
+      return;
+    }
+    if (!String(nome_signatario || '').trim() || !assinatura.startsWith('data:image/')) {
+      res.status(400).json({ error: 'Informe o nome e capture uma assinatura válida.' });
+      return;
+    }
+    if (assinatura.length > 1_500_000) {
+      res.status(413).json({ error: 'A assinatura ficou grande demais. Tente assinar novamente.' });
+      return;
+    }
+
+    const assinaturaSalva = await queryOne<Record<string, unknown>>(
+      `INSERT INTO os_assinaturas (os_id, tipo, nome_signatario, assinatura_data_url, aceite_termos)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (os_id, tipo) DO UPDATE SET
+         nome_signatario = EXCLUDED.nome_signatario,
+         assinatura_data_url = EXCLUDED.assinatura_data_url,
+         aceite_termos = EXCLUDED.aceite_termos,
+         data_assinatura = NOW()
+       RETURNING *`,
+      [req.params['id'], tipoNormalizado, String(nome_signatario).trim(), assinatura, aceite_termos === true]
+    );
+
+    await registrarEvento({
+      osId: req.params['id'], codigo: `ASSINATURA_${tipoNormalizado}`,
+      titulo: `Assinatura de ${tipoNormalizado.toLowerCase()} registrada`, notificar: false,
+    });
+    res.status(201).json({ message: 'Assinatura salva com sucesso', data: assinaturaSalva });
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao salvar assinatura:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao salvar assinatura', detalhe: errMsg });
+  }
+});
+
+// POST /api/os/:id/acoes — Registrar uma ação operacional e deixar o WhatsApp pendente
+router.post('/:id/acoes', async (req: Request, res: Response) => {
+  try {
+    const { acao, criado_por, nao_notificar } = req.body as Record<string, unknown>;
+    const chave = String(acao || '') as AcaoRapida;
+    const config = ACOES_RAPIDAS[chave];
+    if (!config) {
+      res.status(400).json({ error: `Ação inválida. Use: ${Object.keys(ACOES_RAPIDAS).join(', ')}` });
+      return;
+    }
+
+    const osAtual = await queryOne<Record<string, unknown>>(
+      `SELECT os.id, os.numero_os, os.status, c.nome AS cliente_nome, c.telefone AS cliente_telefone
+       FROM service_orders os LEFT JOIN clientes c ON c.id = os.cliente_id WHERE os.id = $1`,
+      [req.params['id']]
+    );
+    if (!osAtual) { res.status(404).json({ error: 'OS não encontrada' }); return; }
+
+    const statusDestino = config.status || String(osAtual['status']);
+    if (config.status && config.status !== osAtual['status']) {
+      let updateSql = 'UPDATE service_orders SET status = $1, data_atualizacao = NOW()';
+      if (config.status === 'PRONTO') updateSql += ', data_conclusao = COALESCE(data_conclusao, NOW())';
+      if (config.status === 'ENTREGUE') updateSql += ', data_entrega = COALESCE(data_entrega, NOW())';
+      updateSql += ' WHERE id = $2';
+      await query(updateSql, [config.status, req.params['id']]);
+    }
+
+    const nome = String(osAtual['cliente_nome'] || 'cliente').split(' ')[0];
+    const mensagem = config.mensagem.replace('{nome}', nome);
+    const notificar = nao_notificar !== true;
+    const evento = await registrarEvento({
+      osId: req.params['id'], codigo: config.codigo, titulo: config.titulo,
+      mensagemCliente: mensagem, status: statusDestino, notificar,
+      criadoPor: String(criado_por || ''),
+    });
+
+    res.status(201).json({
+      message: 'Ação registrada. A mensagem ficará pendente até a integração oficial do WhatsApp ser ativada.',
+      data: { evento, mensagem_cliente: mensagem, telefone: osAtual['cliente_telefone'], status: statusDestino },
+    });
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao registrar ação da OS:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao registrar ação', detalhe: errMsg });
+  }
+});
+
+// POST /api/os/:id/eventos/:eventoId/enviar-whatsapp — Envio manual, rastreável e sem texto livre.
+router.post('/:id/eventos/:eventoId/enviar-whatsapp', async (req: Request, res: Response) => {
+  try {
+    const evento = await queryOne<Record<string, unknown>>(
+      `SELECT ev.id, ev.os_id, ev.codigo, ev.titulo, ev.mensagem_cliente,
+              ev.notificar_whatsapp, ev.notificacao_status,
+              os.numero_os, c.nome AS cliente_nome, c.telefone AS cliente_telefone
+       FROM os_eventos ev
+       INNER JOIN service_orders os ON os.id = ev.os_id
+       LEFT JOIN clientes c ON c.id = os.cliente_id
+       WHERE ev.id = $1 AND ev.os_id = $2`,
+      [req.params['eventoId'], req.params['id']]
+    );
+
+    if (!evento) { res.status(404).json({ error: 'Evento da OS não encontrado.' }); return; }
+    if (evento['notificar_whatsapp'] !== true) {
+      res.status(400).json({ error: 'Este evento foi marcado para não notificar o cliente.' }); return;
+    }
+    if (evento['notificacao_status'] === 'ENVIADO') {
+      res.status(409).json({ error: 'Esta atualização já foi enviada ao WhatsApp.' }); return;
+    }
+    if (!evento['cliente_telefone']) {
+      res.status(400).json({ error: 'Cadastre um WhatsApp válido para este cliente antes de enviar.' }); return;
+    }
+    if (!evento['mensagem_cliente']) {
+      res.status(400).json({ error: 'Este evento não possui uma mensagem autorizada para o cliente.' }); return;
+    }
+
+    try {
+      const resultado = await enviarAtualizacaoOS({
+        telefone: String(evento['cliente_telefone']),
+        nomeCliente: String(evento['cliente_nome'] || 'cliente').split(' ')[0],
+        numeroOS: String(evento['numero_os']),
+        mensagem: String(evento['mensagem_cliente']),
+      });
+
+      await query(
+        `UPDATE os_eventos
+         SET notificacao_status = 'ENVIADO', whatsapp_message_id = $1,
+             notificacao_erro = NULL, notificado_em = NOW()
+         WHERE id = $2`,
+        [resultado.messageId, evento['id']]
+      );
+
+      res.json({
+        message: 'Atualização enviada ao WhatsApp e registrada na linha do tempo.',
+        data: { evento_id: evento['id'], whatsapp_message_id: resultado.messageId, telefone: resultado.telefone },
+      });
+    } catch (envioErro) {
+      const detalhe = envioErro instanceof Error ? envioErro.message : 'Erro desconhecido ao enviar atualização.';
+      await query(
+        `UPDATE os_eventos SET notificacao_status = 'ERRO', notificacao_erro = $1 WHERE id = $2`,
+        [detalhe.slice(0, 1000), evento['id']]
+      );
+      res.status(400).json({ error: 'A atualização não foi enviada. Revise a configuração do WhatsApp e tente novamente.', detalhe });
+    }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Erro ao enviar atualização para WhatsApp:', errMsg);
+    res.status(500).json({ error: 'Erro interno ao preparar a atualização do WhatsApp.' });
   }
 });
 
@@ -405,7 +705,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 // PATCH /api/os/:id/status — Atualizar apenas o status
 router.patch('/:id/status', async (req: Request, res: Response) => {
   try {
-    const { status } = req.body as { status: string };
+    const { status, criado_por } = req.body as { status: string; criado_por?: string };
 
     if (!status) {
       res.status(400).json({ error: 'Campo status é obrigatório' });
@@ -437,6 +737,15 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'OS não encontrada' });
       return;
     }
+
+    await registrarEvento({
+      osId: req.params['id'],
+      codigo: `STATUS_${status}`,
+      titulo: labelStatus(status),
+      status,
+      notificar: false,
+      criadoPor: criado_por || null,
+    });
 
     res.json({ message: 'Status atualizado com sucesso', data: atualizado });
   } catch (error) {

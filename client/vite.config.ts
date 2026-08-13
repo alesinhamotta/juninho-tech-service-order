@@ -12,6 +12,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Necessário somente para prévias temporárias da Manus; não afeta a publicação.
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
