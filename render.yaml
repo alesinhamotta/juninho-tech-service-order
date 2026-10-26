@@ -19,4 +19,18 @@ services:
         sync: false   # Você preencherá este valor no painel da Render
       - key: CORS_ORIGIN
         sync: false   # URL do frontend na Vercel (preenchida após o deploy)
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false   # Token protegido da WhatsApp Cloud API
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false   # ID do número conectado na Meta
+      - key: WHATSAPP_GRAPH_API_VERSION
+        sync: false   # Ex.: vXX.X
+      - key: WHATSAPP_TEMPLATE_STATUS_NAME
+        sync: false   # Modelo de utilidade aprovado na Meta
+      - key: WHATSAPP_TEMPLATE_STATUS_LANGUAGE
+        value: pt_BR
+      - key: WHATSAPP_APP_SECRET
+        sync: false   # Segredo do aplicativo Meta
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false   # Token aleatório usado na verificação do webhook
     healthCheckPath: /health

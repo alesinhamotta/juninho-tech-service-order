@@ -104,10 +104,17 @@ export function validarAssinaturaWebhook(payloadBruto: Buffer | string, assinatu
   if (!assinatura?.startsWith('sha256=')) return false;
 
   const calculada = `sha256=${crypto.createHmac('sha256', appSecret).update(payloadBruto).digest('hex')}`;
-  return crypto.timingSafeEqual(Buffer.from(calculada), Buffer.from(assinatura));
+  const esperadaBuffer = Buffer.from(calculada, 'utf8');
+  const recebidaBuffer = Buffer.from(assinatura, 'utf8');
+  if (esperadaBuffer.length !== recebidaBuffer.length) return false;
+  return crypto.timingSafeEqual(esperadaBuffer, recebidaBuffer);
 }
 
 export function verificarTokenWebhook(token?: string) {
   const esperado = process.env['WHATSAPP_WEBHOOK_VERIFY_TOKEN'];
-  return Boolean(esperado && token && crypto.timingSafeEqual(Buffer.from(esperado), Buffer.from(token)));
+  if (!esperado || !token) return false;
+  const esperadoBuffer = Buffer.from(esperado, 'utf8');
+  const recebidoBuffer = Buffer.from(token, 'utf8');
+  if (esperadoBuffer.length !== recebidoBuffer.length) return false;
+  return crypto.timingSafeEqual(esperadoBuffer, recebidoBuffer);
 }
