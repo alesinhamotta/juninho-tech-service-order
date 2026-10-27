@@ -30,9 +30,11 @@ router.get('/webhook', (req: Request, res: Response) => {
   const challenge = String(req.query['hub.challenge'] || '');
 
   if (mode === 'subscribe' && verificarTokenWebhook(token)) {
+    console.info('[WhatsApp webhook] Verification accepted');
     res.status(200).send(challenge);
     return;
   }
+  console.warn('[WhatsApp webhook] Verification rejected', { mode, hasToken: Boolean(token) });
   res.sendStatus(403);
 });
 
@@ -41,6 +43,7 @@ router.post('/webhook', async (req: WebhookRequest, res: Response) => {
   const assinatura = req.header('x-hub-signature-256');
   const bruto = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
   if (!validarAssinaturaWebhook(bruto, assinatura)) {
+    console.warn('[WhatsApp webhook] Signature rejected', { hasSignature: Boolean(assinatura) });
     res.sendStatus(401);
     return;
   }
@@ -52,6 +55,7 @@ router.post('/webhook', async (req: WebhookRequest, res: Response) => {
   try {
     const payload = (req.body || {}) as MetaPayload;
     const changes = payload.entry?.flatMap((entry) => entry.changes || []) || [];
+    console.info('[WhatsApp webhook] Event accepted', { entries: payload.entry?.length || 0, changes: changes.length });
 
     for (const change of changes) {
       const value = change.value;
